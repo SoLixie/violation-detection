@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Models
+models/
+*.pt
+
+# Video and Image Data
+videos/
+outputs/
+archive/
+*.mp4
+*.avi
+*.jpg
+*.jpeg
+*.png
+
+# Logs
+runs/
+*.log
+*.csv
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
