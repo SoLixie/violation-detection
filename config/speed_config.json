@@ -1,6 +1,7 @@
 {
     "video_path": "videos/crossing1.mp4",
-    "model_path": "models/best.pt",
+    "model_path": "bestv1_tf/bestv1_float32.tflite",
+    "model_task": "detect",
     "output_video_path": "outputs/result.mp4",
     "violations_log_path": "outputs/violations/speeding_violations.csv",
     "speed_limit_kmph": 50,
