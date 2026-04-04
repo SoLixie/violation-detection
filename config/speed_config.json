@@ -1,0 +1,10 @@
+{
+    "video_path": "videos/crossing1.mp4",
+    "model_path": "models/best.pt",
+    "output_video_path": "outputs/result.mp4",
+    "violations_log_path": "outputs/violations/speeding_violations.csv",
+    "speed_limit_kmph": 50,
+    "line1_y": 322,
+    "line2_y": 350,
+    "distance_meters": 12
+}

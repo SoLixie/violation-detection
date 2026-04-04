@@ -25,6 +25,7 @@ runs/
 # Environment
 .env
 .venv
+.smartzebra311/
 env/
 venv/
 ENV/

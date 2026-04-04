@@ -1,92 +1,169 @@
 import cv2
 import os
 import numpy as np
+import json
 
-# Base directory
+MIN_ZONE_POINTS = 3
+
+# -------------------------------
+# Paths
+# -------------------------------
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-video_path = os.path.join(base_dir, "videos", "illegal-parking.mp4")
+config_path = os.path.join(base_dir, "config", "parking_config.json")
 
-if not os.path.exists(video_path):
-    print(f"Error: {video_path} not found.")
+# -------------------------------
+# Load / Save Config
+# -------------------------------
+def load_config():
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    return {
+        "video_path": "videoplayback.mp4",
+        "zebra_zone": [],
+        "buffer_zone": [],
+        "parking_threshold": 10
+    }
+
+def save_config(config):
+    os.makedirs(os.path.dirname(config_path), exist_ok=True)
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=4)
+    print("Zones saved successfully!")
+
+# -------------------------------
+# Video + Frame
+# -------------------------------
+def get_video_path(config):
+    video_path = os.path.join(base_dir, config["video_path"])
+    if not os.path.exists(video_path):
+        print(f"Video not found: {video_path}")
+        exit()
+    return video_path
+
+def load_frame(video_path):
+    cap = cv2.VideoCapture(video_path)
+
+    for i in range(0, 150, 50):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+        ret, frame = cap.read()
+        if ret and np.mean(frame) > 10:
+            cap.release()
+            print(f"Using frame {i}")
+            return frame
+
+    cap.release()
+    print("Could not extract frame")
     exit()
 
-# Load the video and get a clear frame
-cap = cv2.VideoCapture(video_path)
-frame = None
-found_frame = False
-for i in range(0, 150, 50): # Check frames 0, 50, 100
-    cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-    ret, temp_frame = cap.read()
-    if ret and np.mean(temp_frame) > 10: # Skip black frames
-        frame = temp_frame
-        found_frame = True
-        print(f"Using frame {i} for identification.")
-        break
+# -------------------------------
+# Drawing
+# -------------------------------
+def draw_polygon(img, points, color, label=None):
+    if len(points) >= MIN_ZONE_POINTS:
+        overlay = img.copy()
+        pts = np.array(points, np.int32)
+        cv2.fillPoly(overlay, [pts], color)
+        cv2.addWeighted(overlay, 0.18, img, 0.82, 0, img)
 
-if not found_frame:
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-    ret, frame = cap.read()
-    if not ret:
-        print("Error: Could not read video frame.")
-        cap.release()
-        exit()
-cap.release()
+    for i, (x, y) in enumerate(points):
+        cv2.circle(img, (x, y), 5, color, -1)
+        cv2.putText(img, str(i+1), (x+5, y-5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-image_display = frame.copy()
-points = []
+    if len(points) >= 2:
+        pts = np.array(points, np.int32)
+        cv2.polylines(img, [pts], len(points) >= MIN_ZONE_POINTS, color, 2)
 
-def mouse_callback(event, x, y, flags, param):
-    global points, image_display, frame
-    
-    if event == cv2.EVENT_LBUTTONDOWN:
-        if len(points) < 4:
-            points.append((x, y))
-            # Draw the point
-            cv2.circle(image_display, (x, y), 5, (0, 255, 0), -1)
-            cv2.putText(image_display, str(len(points)), (x + 10, y + 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            
-            # Draw line between points
-            if len(points) > 1:
-                cv2.line(image_display, points[-2], points[-1], (0, 255, 0), 2)
-            
-            # Close the polygon
-            if len(points) == 4:
-                cv2.line(image_display, points[3], points[0], (0, 255, 0), 2)
-                
-                # Calculate bounding box
-                pts = np.array(points)
-                bx, by, bw, bh = cv2.boundingRect(pts)
-                
-                print(f"\nNo Parking Zone Coordinates (Bounding Box):")
-                print(f"ZONE_X1 = {bx}")
-                print(f"ZONE_Y1 = {by}")
-                print(f"ZONE_X2 = {bx + bw}")
-                print(f"ZONE_Y2 = {by + bh}")
-                print(f"\nCoordinates for Polygon Detection (more accurate):")
-                print(f"POLYGON = {points}")
-                print(f"\nUpdate these in detect_parking_violation.py.")
-                print("Press 'q' to exit or 'r' to reset.")
+    if label and len(points) >= MIN_ZONE_POINTS:
+        cv2.putText(img, label, (points[0][0], points[0][1] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-        cv2.imshow("Select Parking Zone", image_display)
+# -------------------------------
+# Main
+# -------------------------------
+def main():
+    config = load_config()
+    video_path = get_video_path(config)
+    frame = load_frame(video_path)
 
-cv2.namedWindow("Select Parking Zone", cv2.WINDOW_NORMAL)
-cv2.setMouseCallback("Select Parking Zone", mouse_callback)
+    zebra_points = []
+    buffer_points = []
 
-print("Instructions:")
-print("1. Click 4 points to define the NO PARKING ZONE.")
-print("2. The bounding box will be automatically calculated.")
-print("3. Press 'r' to reset.")
-print("4. Press 'q' or 'ESC' to exit.")
+    mode = "ZEBRA"  # switch later
 
-while True:
-    cv2.imshow("Select Parking Zone", image_display)
-    key = cv2.waitKey(1) & 0xFF
-    if key == 27 or key == ord('q'):
-        break
-    elif key == ord('r'):
-        points = []
-        image_display = frame.copy()
-        print("Resetting...")
+    existing_zebra = [tuple(p) for p in config.get("zebra_zone", [])]
+    existing_buffer = [tuple(p) for p in config.get("buffer_zone", [])]
 
-cv2.destroyAllWindows()
+    def mouse(event, x, y, flags, param):
+        nonlocal zebra_points, buffer_points, mode
+
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if mode == "ZEBRA":
+                zebra_points.append((x, y))
+            else:
+                buffer_points.append((x, y))
+
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            if mode == "ZEBRA" and zebra_points:
+                zebra_points.pop()
+            elif mode == "BUFFER" and buffer_points:
+                buffer_points.pop()
+
+    cv2.namedWindow("Select Zones", cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback("Select Zones", mouse)
+
+    print("\nInstructions:")
+    print("Draw ZEBRA zone first")
+    print("Press N → switch to BUFFER zone")
+    print("Press S → save both zones")
+    print("R → reset current zone | Q → quit\n")
+
+    while True:
+        display = frame.copy()
+
+        # Existing zones
+        if existing_zebra:
+            draw_polygon(display, existing_zebra, (0, 255, 255), "CURRENT ZEBRA")
+        if existing_buffer:
+            draw_polygon(display, existing_buffer, (255, 255, 0), "CURRENT BUFFER")
+
+        # New zones
+        draw_polygon(display, zebra_points, (0, 255, 0), "ZEBRA (DRAWING)")
+        draw_polygon(display, buffer_points, (255, 0, 0), "BUFFER (DRAWING)")
+
+        cv2.putText(display, f"MODE: {mode}", (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+        cv2.imshow("Select Zones", display)
+
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord('n'):
+            mode = "BUFFER"
+            print("Switched to BUFFER zone")
+
+        elif key == ord('r'):
+            if mode == "ZEBRA":
+                zebra_points = []
+            else:
+                buffer_points = []
+            print("Reset current zone")
+
+        elif key == ord('s'):
+            if len(zebra_points) >= MIN_ZONE_POINTS and len(buffer_points) >= MIN_ZONE_POINTS:
+                config["zebra_zone"] = [list(p) for p in zebra_points]
+                config["buffer_zone"] = [list(p) for p in buffer_points]
+                save_config(config)
+                break
+            else:
+                print("Both zones need at least 3 points")
+
+        elif key == ord('q') or key == 27:
+            break
+
+    cv2.destroyAllWindows()
+
+# -------------------------------
+if __name__ == "__main__":
+    main()
