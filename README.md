@@ -16,7 +16,7 @@ This system detects illegal parking violations in video footage using computer v
    - If you instead use `bestv1_tf/bestv1_float32.tflite` or another TensorFlow export, keep reading the troubleshooting notes below.
 
 3. **Prepare Video:**
-   - Place your video file in the `videos/` directory
+   - Place your video file in the `vids/` directory
    - Update the video path in `config/parking_config.json` if needed
 
 4. **Configure Parking Zone:**
@@ -101,14 +101,14 @@ The speed detection uses `config/speed_config.json`:
 
 ### Parking Detection:
 - **Model not found**: Ensure `models/best.pt` exists
-- **Video not found**: Check `videos/` directory and config file
+- **Video not found**: Check `vids/` directory and config file
 - **No violations detected**: Adjust parking threshold in config
 - **Wrong zone**: Run `zone_detection.py` again to redefine the zone
 - **TFLite/TensorFlow model fails to run**: `.tflite` and `.pb` models need `tensorflow` or `tflite-runtime`. On Windows, use a Python version supported by TensorFlow. If you are on Python 3.14, create a new environment with Python 3.10-3.13 and install `tensorflow`.
 
 ### Speed Detection:
 - **Model not found**: Ensure `models/best.pt` exists
-- **Video not found**: Check `videos/` directory and config file
+- **Video not found**: Check `vids/` directory and config file
 - **No speed calculations**: Check that vehicles are crossing both detection lines
 - **Inaccurate speeds**: Adjust the `distance_meters` in config to match real-world distance
 

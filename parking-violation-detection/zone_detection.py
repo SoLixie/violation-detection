@@ -111,6 +111,7 @@ def main():
                 buffer_points.pop()
 
     cv2.namedWindow("Select Zones", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty("Select Zones", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     cv2.setMouseCallback("Select Zones", mouse)
 
     print("\nInstructions:")

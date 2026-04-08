@@ -2,12 +2,12 @@ import numpy as np
 from deep_sort_realtime.deepsort_tracker import DeepSort
 
 tracker = DeepSort(
-    max_iou_distance=0.7,
-    max_age=30,
-    n_init=3,
-    max_cosine_distance=0.4,
-    nn_budget=20,
-    gating_only_position=True,
+    max_iou_distance=0.9,
+    max_age=60,
+    n_init=1,
+    max_cosine_distance=0.6,
+    nn_budget=50,
+    gating_only_position=False,
     embedder=None,
 )
 

@@ -1,11 +1,51 @@
 {
-    "video_path": "videos/crossing1.mp4",
-    "model_path": "bestv1_tf/bestv1_float32.tflite",
+    "video_path": "vids/vid1.mp4",
+    "model_path": "yolov8n.pt",
     "model_task": "detect",
     "output_video_path": "outputs/result.mp4",
     "violations_log_path": "outputs/violations/speeding_violations.csv",
     "speed_limit_kmph": 50,
     "line1_y": 322,
     "line2_y": 350,
-    "distance_meters": 12
+    "distance_meters": 3,
+    "line1": [
+        [
+            2268,
+            1145
+        ],
+        [
+            2480,
+            1171
+        ]
+    ],
+    "line2": [
+        [
+            2265,
+            1155
+        ],
+        [
+            2051,
+            1139
+        ]
+    ],
+    "box1": [
+        [
+            2269,
+            105
+        ],
+        [
+            2483,
+            1376
+        ]
+    ],
+    "box2": [
+        [
+            2054,
+            83
+        ],
+        [
+            2262,
+            1363
+        ]
+    ]
 }

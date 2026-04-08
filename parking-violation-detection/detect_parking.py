@@ -30,7 +30,7 @@ def load_config():
             log(f"Error loading config: {e}")
 
     return {
-        "video_path": "videos/illegal-parking.mp4",
+        "video_path": "vids/illegal-parking.mp4",
         "model_path": "models/best.pt",
         "zebra_zone": [],
         "buffer_zone": [],
@@ -60,6 +60,11 @@ def resolve_video_path():
         os.path.join(base_dir, config.get("video_path", "")),
         config.get("video_path", "")
     ]
+
+    video_path = config.get("video_path", "")
+    if video_path.startswith("videos/"):
+        candidates.append(os.path.join(base_dir, "vids", video_path.split("/", 1)[1]))
+
     for path in candidates:
         if os.path.exists(path):
             log(f"Using video: {path}")
@@ -163,6 +168,9 @@ def main():
     log("Starting parking detection. Press ESC to close the window.")
     log(f"Saving annotated output to: {output_video_path}")
     log(f"Display/output width capped at: {display_max_width}px")
+
+    cv2.namedWindow("Illegal Parking Detection", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty("Illegal Parking Detection", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
     vehicle_entry_time = {}
     vehicle_positions = {}

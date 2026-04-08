@@ -21,8 +21,27 @@ def load_config():
         config = json.load(f)
 
     for key in ("video_path", "model_path", "output_video_path", "violations_log_path"):
-        if key in config:
-            config[key] = str((PROJECT_ROOT / config[key]).resolve())
+        if key not in config:
+            continue
+
+        value = config[key]
+        if key == "model_path":
+            model_path = Path(value)
+            if model_path.is_absolute() or model_path.parent != Path('.'):
+                config[key] = str((PROJECT_ROOT / value).resolve())
+            else:
+                config[key] = value
+            continue
+
+        path_value = Path(value)
+        if key == "video_path" and not path_value.is_absolute():
+            if path_value.parts and path_value.parts[0] == "videos":
+                legacy_candidate = PROJECT_ROOT / "vids" / Path(*path_value.parts[1:])
+                if legacy_candidate.exists():
+                    config[key] = str(legacy_candidate.resolve())
+                    continue
+
+        config[key] = str((PROJECT_ROOT / value).resolve())
 
     return config
 
@@ -41,19 +60,54 @@ def resolve_lines(config, frame_width):
     raise KeyError("speed_config.json must define either line1/line2 or line1_y/line2_y")
 
 
+def resolve_boxes(config):
+    if "box1" not in config or "box2" not in config:
+        raise KeyError("speed_config.json must define both box1 and box2")
+
+    box1 = tuple(map(tuple, config["box1"]))
+    box2 = tuple(map(tuple, config["box2"]))
+    return box1, box2
+
+
 def scale_line(line, scale):
     return ((int(line[0][0]*scale), int(line[0][1]*scale)),
             (int(line[1][0]*scale), int(line[1][1]*scale)))
 
 
+def draw_zone_overlay(frame, zone1, zone2, zone_type):
+    if zone_type == "box":
+        cv2.rectangle(frame, zone1[0], zone1[1], (0, 0, 255), 3)
+        cv2.rectangle(frame, zone2[0], zone2[1], (255, 0, 0), 3)
+    else:
+        cv2.line(frame, zone1[0], zone1[1], (0,0,255), 3)
+        cv2.line(frame, zone2[0], zone2[1], (255,0,0), 3)
+
+
+def draw_label(frame, text, origin, color):
+    x, y = origin
+    (text_width, text_height), baseline = cv2.getTextSize(
+        text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
+    )
+    top = max(0, y - text_height - baseline - 8)
+    cv2.rectangle(
+        frame,
+        (x, top),
+        (x + text_width + 10, y),
+        color,
+        -1,
+    )
+    cv2.putText(
+        frame,
+        text,
+        (x + 5, y - 6),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        2,
+    )
+
 def main():
     config = load_config()
-
-    if not os.path.exists(config["model_path"]):
-        raise FileNotFoundError(
-            f"Configured model file was not found: {config['model_path']}. "
-            "Update config/speed_config.json to point to an existing model export."
-        )
 
     model = YOLO(config["model_path"], task=config.get("model_task", "detect"))
     cap = cv2.VideoCapture(config["video_path"])
@@ -64,20 +118,29 @@ def main():
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     estimator = SpeedEstimator(fps, config["distance_meters"])
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1
-    line1, line2 = resolve_lines(config, frame_width)
+    if "box1" in config and "box2" in config:
+        zone1, zone2 = resolve_boxes(config)
+        zone_type = "box"
+    else:
+        zone1, zone2 = resolve_lines(config, frame_width)
+        zone_type = "line"
 
     log_path = config["violations_log_path"]
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
+    cv2.namedWindow("Speed Detection", cv2.WINDOW_NORMAL)
+
     logged = set()
-    frame_id = 0
+    frame_delay_ms = max(1, int(1000 / fps))
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        results = model(frame, conf=0.25)[0]
+        frame_id = max(0, int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1)
+
+        results = model(frame, conf=0.25, imgsz=416, verbose=False)[0]
         detections = []
 
         for box, conf, cls in zip(results.boxes.xyxy, results.boxes.conf, results.boxes.cls):
@@ -88,20 +151,20 @@ def main():
 
         tracks = update_tracker(detections, frame)
 
-        cv2.line(frame, line1[0], line1[1], (0,0,255),2)
-        cv2.line(frame, line2[0], line2[1], (255,0,0),2)
+        draw_zone_overlay(frame, zone1, zone2, zone_type)
 
         for tid,x1,y1,x2,y2,cls in tracks:
             pt = get_bottom_center(x1,y1,x2,y2)
-            speed = estimator.update(tid, pt, frame_id, line1, line2)
+            measurement, _events = estimator.update(
+                tid, pt, frame_id, zone1, zone2, zone_type
+            )
 
             cv2.rectangle(frame,(x1,y1),(x2,y2),(0,255,0),2)
 
-            if speed:
+            if measurement:
+                speed = measurement["speed_kmph"]
                 color = (0,0,255) if speed > config["speed_limit_kmph"] else (0,255,0)
-
-                cv2.putText(frame,f"{speed:.1f} km/h",(x1,y1-10),
-                            cv2.FONT_HERSHEY_SIMPLEX,0.6,color,2)
+                draw_label(frame, f"{speed:.1f} km/h", (x1, max(30, y1 - 12)), color)
 
                 if speed > config["speed_limit_kmph"] and tid not in logged:
                     output_dir = PROJECT_ROOT / "outputs" / "violations"
@@ -116,9 +179,7 @@ def main():
                     logged.add(tid)
 
         cv2.imshow("Speed Detection", frame)
-        frame_id += 1
-
-        if cv2.waitKey(1)==27:
+        if cv2.waitKey(frame_delay_ms) == 27:
             break
 
     cap.release()
