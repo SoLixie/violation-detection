@@ -4,6 +4,8 @@ import json
 import sys
 import importlib.util
 import argparse
+from pathlib import Path
+import cv2
 
 def log(message):
     print(message, flush=True)
@@ -15,6 +17,18 @@ base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 config_path = os.path.join(base_dir, "config", "parking_config.json")
 output_video_path = os.path.join(base_dir, "outputs", "parking_detection_output.mp4")
 display_max_width = 1280
+UI_FONT = cv2.FONT_HERSHEY_DUPLEX
+CLASS_LABELS = {
+    1: "Bicycle",
+    2: "Car",
+    3: "Motorbike",
+    5: "Bus",
+    7: "Truck",
+}
+ZONE_STYLES = {
+    "zebra": {"label": "Zebra Zone", "color": (64, 92, 255)},
+    "buffer": {"label": "Buffer Zone", "color": (255, 191, 64)},
+}
 
 # -------------------------------
 # Load Config
@@ -72,6 +86,118 @@ def resolve_video_path():
 
     log("Video not found.")
     exit(1)
+
+
+def draw_badge(frame, text, origin, color, font_scale=0.6, text_color=(245, 247, 250)):
+    import cv2
+
+    frame_h, frame_w = frame.shape[:2]
+    x, y = origin
+    (text_width, text_height), baseline = cv2.getTextSize(
+        text, UI_FONT, font_scale, 1
+    )
+    box_width = text_width + 12
+    box_height = text_height + baseline + 8
+    x = max(6, min(x, frame_w - box_width - 6))
+    y = max(box_height + 6, min(y, frame_h - 6))
+    top = y - box_height
+    right = x + box_width
+
+    panel = frame.copy()
+    cv2.rectangle(panel, (x, top), (right, y), (16, 20, 28), -1)
+    cv2.rectangle(panel, (x, top), (right, y), color, 1)
+    cv2.addWeighted(panel, 0.58, frame, 0.42, 0, frame)
+
+    cv2.putText(
+        frame,
+        text,
+        (x + 6, y - 5),
+        UI_FONT,
+        font_scale,
+        text_color,
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def draw_styled_polygon(frame, polygon, label, color):
+    import cv2
+    import numpy as np
+
+    overlay = frame.copy()
+    cv2.fillPoly(overlay, [polygon], color)
+    cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame)
+
+    cv2.polylines(frame, [polygon], True, (255, 255, 255), 3, cv2.LINE_AA)
+    cv2.polylines(frame, [polygon], True, color, 2, cv2.LINE_AA)
+
+    for point in polygon:
+        px, py = int(point[0]), int(point[1])
+        cv2.circle(frame, (px, py), 6, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(frame, (px, py), 3, color, -1, cv2.LINE_AA)
+
+    anchor = polygon[np.argmin(polygon[:, 0])]
+    draw_badge(frame, label, (int(anchor[0]) + 10, max(26, int(anchor[1]) - 8)), color, font_scale=0.45)
+
+
+def draw_vehicle_box(frame, box, color, emphasis=False):
+    import cv2
+
+    x1, y1, x2, y2 = box
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1, cv2.LINE_AA)
+    cv2.addWeighted(overlay, 0.03 if not emphasis else 0.06, frame, 0.97 if not emphasis else 0.94, 0, frame)
+
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1, cv2.LINE_AA)
+
+    corner = 10
+    segments = (
+        ((x1, y1), (x1 + corner, y1)),
+        ((x1, y1), (x1, y1 + corner)),
+        ((x2, y1), (x2 - corner, y1)),
+        ((x2, y1), (x2, y1 + corner)),
+        ((x1, y2), (x1 + corner, y2)),
+        ((x1, y2), (x1, y2 - corner)),
+        ((x2, y2), (x2 - corner, y2)),
+        ((x2, y2), (x2, y2 - corner)),
+    )
+    for start, end in segments:
+        cv2.line(frame, start, end, color, 1, cv2.LINE_AA)
+
+
+def draw_status_hud(frame, threshold_seconds, violation_count):
+    import cv2
+
+    frame_w = frame.shape[1]
+    panel = frame.copy()
+    left = max(8, frame_w - 210)
+    top = 12
+    right = frame_w - 12
+    bottom = 62
+    cv2.rectangle(panel, (left, top), (right, bottom), (18, 22, 30), -1)
+    cv2.addWeighted(panel, 0.56, frame, 0.44, 0, frame)
+
+    cv2.putText(
+        frame,
+        f"Violations {violation_count}",
+        (left + 12, top + 22),
+        UI_FONT,
+        0.55,
+        (245, 247, 250),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        f"Threshold {threshold_seconds}s",
+        (left + 12, top + 42),
+        UI_FONT,
+        0.43,
+        (203, 213, 225),
+        1,
+        cv2.LINE_AA,
+    )
 
 # -------------------------------
 # Helpers
@@ -207,15 +333,9 @@ def main():
         # -------------------------------
         # Draw Zones
         # -------------------------------
-        cv2.polylines(frame, [zebra_polygon], True, (0, 0, 255), 2)
-        cv2.putText(frame, "ZEBRA ZONE",
-                    (zebra_polygon[0][0], zebra_polygon[0][1] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-        cv2.polylines(frame, [buffer_polygon], True, (0, 165, 255), 2)
-        cv2.putText(frame, "BUFFER ZONE",
-                    (buffer_polygon[0][0], buffer_polygon[0][1] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+        draw_styled_polygon(frame, zebra_polygon, ZONE_STYLES["zebra"]["label"], ZONE_STYLES["zebra"]["color"])
+        draw_styled_polygon(frame, buffer_polygon, ZONE_STYLES["buffer"]["label"], ZONE_STYLES["buffer"]["color"])
+        draw_status_hud(frame, config["parking_threshold"], violation_count)
 
         current_time = time.time()
 
@@ -234,8 +354,9 @@ def main():
             inside_zebra = is_inside_polygon(cx, cy, zebra_polygon)
             inside_buffer = is_inside_polygon(cx, cy, buffer_polygon)
 
-            color = (0, 255, 0)
-            label = f"Vehicle {track_id}"
+            color = (125, 211, 252)
+            status_text = "Moving"
+            label = f"{CLASS_LABELS.get(class_id, 'Vehicle')}"
 
             if stationary and (inside_zebra or inside_buffer):
 
@@ -247,36 +368,34 @@ def main():
                 if duration > config["parking_threshold"]:
 
                     if inside_zebra:
-                        color = (0, 0, 255)
-                        label = "ILLEGAL PARKING (ZEBRA)"
+                        color = ZONE_STYLES["zebra"]["color"]
+                        status_text = "Violation  Zebra"
                     else:
-                        color = (0, 165, 255)
-                        label = "ILLEGAL PARKING (NEAR)"
+                        color = ZONE_STYLES["buffer"]["color"]
+                        status_text = "Violation  Buffer"
 
                     if track_id not in violated_ids:
                         violation_count += 1
                         violated_ids.add(track_id)
-
-                    cv2.putText(frame, label, (x1, y1 - 40),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-
-                cv2.putText(frame, f"Time: {int(duration)}s",
-                            (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                else:
+                    color = (52, 211, 153)
+                    status_text = "Observed"
 
             else:
                 if track_id in vehicle_entry_time:
                     del vehicle_entry_time[track_id]
 
-            # Draw
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.circle(frame, (cx, cy), 5, color, -1)
-            cv2.putText(frame, label, (x1, y2 + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            draw_vehicle_box(frame, (x1, y1, x2, y2), color, emphasis=track_id in violated_ids)
+            cv2.circle(frame, (cx, cy), 8, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(frame, (cx, cy), 4, color, -1, cv2.LINE_AA)
+            title_y = y1 + 18 if y1 < 28 else y1 - 6
+            center_x = int((x1 + x2) / 2)
 
-        cv2.putText(frame, f"Violations: {violation_count}",
-                    (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            if track_id in vehicle_entry_time:
+                duration = current_time - vehicle_entry_time[track_id]
+                draw_badge(frame, f"{status_text} {int(duration)}s", (center_x - 34, title_y), color, font_scale=0.4)
+            else:
+                draw_badge(frame, status_text, (center_x - 24, title_y), color, font_scale=0.4)
 
         output_frame = resize_for_output(frame, display_max_width)
         writer.write(output_frame)

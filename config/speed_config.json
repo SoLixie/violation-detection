@@ -1,51 +1,34 @@
 {
-    "video_path": "vids/vid1.mp4",
+    "video_path": "videos/speeding.mp4",
     "model_path": "yolov8n.pt",
     "model_task": "detect",
     "output_video_path": "outputs/result.mp4",
     "violations_log_path": "outputs/violations/speeding_violations.csv",
     "speed_limit_kmph": 50,
-    "line1_y": 322,
-    "line2_y": 350,
-    "distance_meters": 3,
+    "road_type": "asian_national_highways",
+    "measurement_basis": "distance_meters",
+    "road_marking_meters": 6,
+    "gap_meters": 3,
+    "line_width_mm": 100,
+    "distance_meters": 6,
     "line1": [
         [
-            2268,
-            1145
+            91,
+            148
         ],
         [
-            2480,
-            1171
+            592,
+            143
         ]
     ],
     "line2": [
         [
-            2265,
-            1155
+            0,
+            233
         ],
         [
-            2051,
-            1139
-        ]
-    ],
-    "box1": [
-        [
-            2269,
-            105
-        ],
-        [
-            2483,
-            1376
-        ]
-    ],
-    "box2": [
-        [
-            2054,
-            83
-        ],
-        [
-            2262,
-            1363
+            640,
+            233
         ]
     ]
 }

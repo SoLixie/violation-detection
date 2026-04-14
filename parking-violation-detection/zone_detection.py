@@ -4,6 +4,15 @@ import numpy as np
 import json
 
 MIN_ZONE_POINTS = 3
+UI_FONT = cv2.FONT_HERSHEY_DUPLEX
+ZONE_STYLES = {
+    "ZEBRA": {"label": "Zebra Zone", "color": (64, 92, 255)},
+    "BUFFER": {"label": "Buffer Zone", "color": (255, 191, 64)},
+}
+EXISTING_ZONE_STYLES = {
+    "ZEBRA": {"label": "Current Zebra", "color": (64, 224, 208)},
+    "BUFFER": {"label": "Current Buffer", "color": (168, 85, 247)},
+}
 
 # -------------------------------
 # Paths
@@ -64,20 +73,91 @@ def draw_polygon(img, points, color, label=None):
         overlay = img.copy()
         pts = np.array(points, np.int32)
         cv2.fillPoly(overlay, [pts], color)
-        cv2.addWeighted(overlay, 0.18, img, 0.82, 0, img)
+        cv2.addWeighted(overlay, 0.1, img, 0.9, 0, img)
 
     for i, (x, y) in enumerate(points):
-        cv2.circle(img, (x, y), 5, color, -1)
-        cv2.putText(img, str(i+1), (x+5, y-5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        cv2.circle(img, (x, y), 6, (255, 255, 255), -1, cv2.LINE_AA)
+        cv2.circle(img, (x, y), 3, color, -1, cv2.LINE_AA)
+        cv2.putText(img, str(i+1), (x+10, y-8),
+                    UI_FONT, 0.42, (245, 247, 250), 1, cv2.LINE_AA)
 
     if len(points) >= 2:
         pts = np.array(points, np.int32)
-        cv2.polylines(img, [pts], len(points) >= MIN_ZONE_POINTS, color, 2)
+        cv2.polylines(img, [pts], len(points) >= MIN_ZONE_POINTS, (255, 255, 255), 3, cv2.LINE_AA)
+        cv2.polylines(img, [pts], len(points) >= MIN_ZONE_POINTS, color, 2, cv2.LINE_AA)
 
     if label and len(points) >= MIN_ZONE_POINTS:
-        cv2.putText(img, label, (points[0][0], points[0][1] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        anchor = min(points, key=lambda p: p[0])
+        draw_badge(img, label, (anchor[0] + 10, max(26, anchor[1] - 8)), color, font_scale=0.45)
+
+
+def draw_badge(img, text, origin, color, font_scale=0.6):
+    img_h, img_w = img.shape[:2]
+    x, y = origin
+    (text_width, text_height), baseline = cv2.getTextSize(
+        text, UI_FONT, font_scale, 1
+    )
+    box_width = text_width + 12
+    box_height = text_height + baseline + 8
+    x = max(6, min(x, img_w - box_width - 6))
+    y = max(box_height + 6, min(y, img_h - 6))
+    top = y - box_height
+    right = x + box_width
+
+    panel = img.copy()
+    cv2.rectangle(panel, (x, top), (right, y), (16, 20, 28), -1)
+    cv2.rectangle(panel, (x, top), (right, y), color, 1)
+    cv2.addWeighted(panel, 0.58, img, 0.42, 0, img)
+
+    cv2.putText(
+        img,
+        text,
+        (x + 6, y - 5),
+        UI_FONT,
+        font_scale,
+        (245, 247, 250),
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def draw_header(img, mode):
+    img_w = img.shape[1]
+    panel = img.copy()
+    left = max(8, img_w - 295)
+    cv2.rectangle(panel, (left, 12), (img_w - 12, 78), (18, 22, 30), -1)
+    cv2.addWeighted(panel, 0.56, img, 0.44, 0, img)
+
+    cv2.putText(
+        img,
+        f"Zone Setup {mode}",
+        (left + 12, 34),
+        UI_FONT,
+        0.52,
+        (248, 250, 252),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        img,
+        "Left add  Right undo  N switch",
+        (left + 12, 54),
+        UI_FONT,
+        0.38,
+        (203, 213, 225),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        img,
+        "R reset  S save  ESC quit",
+        (left + 12, 70),
+        UI_FONT,
+        0.38,
+        (148, 163, 184),
+        1,
+        cv2.LINE_AA,
+    )
 
 # -------------------------------
 # Main
@@ -122,19 +202,21 @@ def main():
 
     while True:
         display = frame.copy()
+        draw_header(display, mode)
 
         # Existing zones
         if existing_zebra:
-            draw_polygon(display, existing_zebra, (0, 255, 255), "CURRENT ZEBRA")
+            style = EXISTING_ZONE_STYLES["ZEBRA"]
+            draw_polygon(display, existing_zebra, style["color"], style["label"])
         if existing_buffer:
-            draw_polygon(display, existing_buffer, (255, 255, 0), "CURRENT BUFFER")
+            style = EXISTING_ZONE_STYLES["BUFFER"]
+            draw_polygon(display, existing_buffer, style["color"], style["label"])
 
         # New zones
-        draw_polygon(display, zebra_points, (0, 255, 0), "ZEBRA (DRAWING)")
-        draw_polygon(display, buffer_points, (255, 0, 0), "BUFFER (DRAWING)")
-
-        cv2.putText(display, f"MODE: {mode}", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        style = ZONE_STYLES["ZEBRA"]
+        draw_polygon(display, zebra_points, style["color"], f"{style['label']} Drawing")
+        style = ZONE_STYLES["BUFFER"]
+        draw_polygon(display, buffer_points, style["color"], f"{style['label']} Drawing")
 
         cv2.imshow("Select Zones", display)
 

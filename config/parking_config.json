@@ -1,5 +1,5 @@
 {
-    "video_path": "vids/vid1.mp4",
+    "video_path": "videos/vid1.mp4",
     "model_path": "yolov8n.pt",
     "zone_polygon": [
         [

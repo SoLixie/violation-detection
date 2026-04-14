@@ -9,7 +9,7 @@ class SpeedEstimator:
         self.prev_positions = {}
         self.vehicle_measurements = {}
 
-    def update(self, track_id, curr_point, frame_idx, zone1, zone2, zone_type="line", vehicle_box=None):
+    def update(self, track_id, curr_point, frame_idx, zone1, zone2):
         events = []
         prev_point = self.prev_positions.get(track_id)
         self.prev_positions[track_id] = curr_point
@@ -17,8 +17,8 @@ class SpeedEstimator:
         if track_id not in self.zone_entry_frames:
             self.zone_entry_frames[track_id] = {}
 
-        zone1_reached = self._zone_reached(prev_point, curr_point, zone1, zone_type, vehicle_box)
-        zone2_reached = self._zone_reached(prev_point, curr_point, zone2, zone_type, vehicle_box)
+        zone1_reached = self._zone_reached(prev_point, curr_point, zone1)
+        zone2_reached = self._zone_reached(prev_point, curr_point, zone2)
 
         if zone1_reached and 1 not in self.zone_entry_frames[track_id]:
             self.zone_entry_frames[track_id][1] = frame_idx
@@ -46,30 +46,7 @@ class SpeedEstimator:
 
         return self.vehicle_measurements.get(track_id), events
 
-    def _zone_reached(self, prev_point, curr_point, zone, zone_type, vehicle_box):
-        if zone_type == "box":
-            if prev_point is None:
-                return False
-            return self._cross_box_center_axis(prev_point, curr_point, zone)
-
+    def _zone_reached(self, prev_point, curr_point, zone):
         if prev_point is None:
             return False
         return check_line_crossing(prev_point, curr_point, zone)
-
-    def _cross_box_center_axis(self, prev_point, curr_point, box):
-        (x1, y1), (x2, y2) = box
-        width = abs(x2 - x1)
-        height = abs(y2 - y1)
-
-        if height >= width:
-            center_x = (x1 + x2) / 2
-            return (
-                (prev_point[0] < center_x <= curr_point[0]) or
-                (prev_point[0] > center_x >= curr_point[0])
-            )
-
-        center_y = (y1 + y2) / 2
-        return (
-            (prev_point[1] < center_y <= curr_point[1]) or
-            (prev_point[1] > center_y >= curr_point[1])
-        )
