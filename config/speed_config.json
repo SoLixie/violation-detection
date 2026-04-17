@@ -1,7 +1,9 @@
 {
     "video_path": "videos/speeding.mp4",
-    "model_path": "yolov8n.pt",
-    "model_task": "detect",
+    "model_path": "bestv1_tf/bestv1_float32.tflite",
+    "use_tpu": true,
+    "imgsz": 320,
+    "display_window": false,
     "output_video_path": "outputs/result.mp4",
     "violations_log_path": "outputs/violations/speeding_violations.csv",
     "speed_limit_kmph": 50,
