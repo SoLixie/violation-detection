@@ -1,4 +1,7 @@
-from utils import check_line_crossing
+try:
+    from .utils import check_line_crossing
+except ImportError:
+    from utils import check_line_crossing
 
 
 class SpeedEstimator:

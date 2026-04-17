@@ -245,11 +245,13 @@ def main():
     log("Ultralytics imported.")
 
     log("Importing tracker...")
-    from tracker import update_tracker
+    try:
+        from .tracker import update_tracker
+        from .utils import get_bottom_center
+    except ImportError:
+        from tracker import update_tracker
+        from utils import get_bottom_center
     log("Tracker imported.")
-
-    log("Importing utils...")
-    from utils import get_bottom_center
     log("Utils imported.")
 
     log("Starting detect_parking.py")

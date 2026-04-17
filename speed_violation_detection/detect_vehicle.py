@@ -6,9 +6,21 @@ from pathlib import Path
 from datetime import datetime
 from ultralytics import YOLO
 
-from tracker import update_tracker
-from utils import get_bottom_center
-from speed_estimator import SpeedEstimator
+try:
+    from pymongo import MongoClient
+    from pymongo.errors import PyMongoError
+except ImportError:
+    MongoClient = None
+    PyMongoError = Exception
+
+try:
+    from .tracker import update_tracker
+    from .utils import get_bottom_center
+    from .speed_estimator import SpeedEstimator
+except ImportError:
+    from tracker import update_tracker
+    from utils import get_bottom_center
+    from speed_estimator import SpeedEstimator
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -31,6 +43,33 @@ ROAD_MARKING_PRESETS = {
     "dzongkhag_other_roads": {"road_marking_meters": 4.0, "gap_meters": 2.0, "line_width_mm": 100},
 }
 UI_FONT = cv2.FONT_HERSHEY_DUPLEX
+
+
+def require_env_path(var_name):
+    value = os.getenv(var_name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"Set the {var_name} environment variable to the external SSD folder path."
+        )
+
+    path = Path(value)
+    if not path.exists():
+        raise RuntimeError(
+            f"{var_name} points to '{path}', but that path does not exist. "
+            "Connect the external SSD and try again."
+        )
+
+    if not path.is_dir():
+        raise RuntimeError(f"{var_name} must point to a directory, not a file: {path}")
+
+    return path
+
+
+def require_env_value(var_name, help_text):
+    value = os.getenv(var_name, "").strip()
+    if not value:
+        raise RuntimeError(f"Set the {var_name} environment variable. {help_text}")
+    return value
 
 
 def load_config():
@@ -243,6 +282,34 @@ def draw_status_hud(frame, speed_limit, violation_count):
 def main():
     config = load_config()
 
+    if MongoClient is None:
+        raise RuntimeError(
+            "pymongo is not installed. Install it before running MongoDB uploads."
+        )
+
+    mongo_uri = require_env_value(
+        "VIOLATIONS_MONGO_URI",
+        "Use your MongoDB Atlas connection string.",
+    )
+    mongo_db_name = os.getenv("VIOLATIONS_MONGO_DB", "violations_db").strip() or "violations_db"
+    mongo_collection_name = (
+        os.getenv("VIOLATIONS_MONGO_COLLECTION", "violations").strip() or "violations"
+    )
+
+    try:
+        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        client.admin.command("ping")
+        db = client[mongo_db_name]
+        collection = db[mongo_collection_name]
+    except PyMongoError as exc:
+        raise RuntimeError(f"Could not connect to MongoDB Atlas: {exc}") from exc
+
+    ssd_root = require_env_path("VIOLATIONS_SSD_PATH")
+    output_root = ssd_root / "speed_violations"
+    image_output_dir = output_root / "images"
+    image_output_dir.mkdir(parents=True, exist_ok=True)
+    log_path = output_root / "speeding_violations.csv"
+
     model = YOLO(config["model_path"], task=config.get("model_task", "detect"))
     cap = cv2.VideoCapture(config["video_path"])
 
@@ -254,9 +321,6 @@ def main():
     estimator = SpeedEstimator(fps, distance_meters)
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1
     zone1, zone2 = resolve_lines(config, frame_width)
-
-    log_path = config["violations_log_path"]
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
     cv2.namedWindow("Speed Detection", cv2.WINDOW_NORMAL)
 
@@ -303,14 +367,31 @@ def main():
                 draw_label(frame, speed_text, (label_x, detail_y), accent, font_scale=0.4, align="center")
 
                 if is_violation and tid not in logged:
-                    output_dir = PROJECT_ROOT / "outputs" / "violations"
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    img_path = str(output_dir / f"{tid}.jpg")
-                    cv2.imwrite(img_path, frame)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    img_path = image_output_dir / f"speed_{tid}_{timestamp}.jpg"
+                    cv2.imwrite(str(img_path), frame)
 
-                    with open(log_path,"a",newline="", encoding="utf-8") as f:
+                    try:
+                        with open(img_path, "rb") as image_file:
+                            image_bytes = image_file.read()
+                        data = {
+                            "track_id": tid,
+                            "type": "speed",
+                            "time": datetime.now(),
+                            "speed": speed,
+                            "image": image_bytes,
+                            "image_filename": img_path.name,
+                            "image_path": str(img_path),
+                        }
+                        collection.insert_one(data)
+                    except PyMongoError as exc:
+                        raise RuntimeError(
+                            f"Failed to upload violation image for track ID {tid} to MongoDB: {exc}"
+                        ) from exc
+
+                    with open(log_path, "a", newline="", encoding="utf-8") as f:
                         writer = csv.writer(f)
-                        writer.writerow([datetime.now(), tid, speed, img_path])
+                        writer.writerow([datetime.now(), tid, speed, str(img_path)])
 
                     logged.add(tid)
             else:
