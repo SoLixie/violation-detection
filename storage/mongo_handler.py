@@ -4,11 +4,15 @@ import numpy as np
 from pymongo import MongoClient
 from pathlib import Path
 from datetime import datetime
-import os
 
 
 class MongoHandler:
-    def __init__(self, mongo_uri: str, db_name: str = "violation_db", collection_name: str = "violations"):
+    def __init__(
+        self,
+        mongo_uri: str,
+        db_name: str = "smart_crossing_db",
+        collection_name: str = "violation"
+    ):
         self.mongo_uri = mongo_uri
         self.db_name = db_name
         self.collection_name = collection_name
@@ -30,7 +34,7 @@ class MongoHandler:
             self.collection = self.db[self.collection_name]
             self.fs = gridfs.GridFS(self.db)
 
-            print("✅ MongoDB connected")
+            print("✅ MongoDB Atlas connected")
             return True
 
         except Exception as e:
@@ -38,7 +42,7 @@ class MongoHandler:
             return False
 
     # =========================================================
-    # SAVE VIOLATION (FIXED + CLEAN)
+    # SAVE VIOLATION (IMAGE → GRIDFS)
     # =========================================================
     def save_violation(
         self,
@@ -46,7 +50,6 @@ class MongoHandler:
         track_id: int,
         vtype: str,
         speed: float = 0.0,
-        video_frames: list = None,
         metadata: dict = None
     ) -> bool:
 
@@ -70,7 +73,7 @@ class MongoHandler:
 
             self.collection.insert_one(doc)
 
-            print(f"💾 Saved {vtype} | ID={track_id} | Speed={speed:.1f}")
+            print(f"💾 Saved {vtype} | ID={track_id} | Speed={speed:.1f} km/h")
             return True
 
         except Exception as e:
@@ -78,7 +81,7 @@ class MongoHandler:
             return False
 
     # =========================================================
-    # SAVE VIDEO CLIP
+    # SAVE VIDEO (SSD)
     # =========================================================
     def save_video_clip(self, video_frames: list, video_path: Path):
         try:
@@ -115,12 +118,17 @@ class MongoHandler:
 _handler = None
 
 
-def get_mongo_handler(mongo_uri: str = None, db_name: str = "violation_db", collection_name: str = "violations"):
+def get_mongo_handler(
+    mongo_uri: str = None,
+    db_name: str = "smart_crossing_db",
+    collection_name: str = "violation"
+):
     global _handler
 
     if _handler is None:
         _handler = MongoHandler(
-            mongo_uri or os.getenv("MONGO_URI", "mongodb://localhost:27017"),
+            mongo_uri or
+            "mongodb+srv://zebra_backend:backend_zebra@smart-zebra-crossing-cl.kahl9t8.mongodb.net/smart_crossing_db?retryWrites=true&w=majority",
             db_name,
             collection_name
         )
@@ -129,6 +137,9 @@ def get_mongo_handler(mongo_uri: str = None, db_name: str = "violation_db", coll
     return _handler
 
 
+# =========================================================
+# CONVENIENCE WRAPPER
+# =========================================================
 def save_violation(*args, **kwargs):
     handler = get_mongo_handler()
     return handler.save_violation(*args, **kwargs)
