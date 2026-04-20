@@ -5,22 +5,19 @@ import csv
 from pathlib import Path
 from datetime import datetime
 from ultralytics import YOLO
+import sys
 
 try:
-    from pymongo import MongoClient
-    from pymongo.errors import PyMongoError
-except ImportError:
-    MongoClient = None
-    PyMongoError = Exception
-
-try:
-    from .tracker import update_tracker
-    from .utils import get_bottom_center
     from .speed_estimator import SpeedEstimator
 except ImportError:
-    from tracker import update_tracker
-    from utils import get_bottom_center
     from speed_estimator import SpeedEstimator
+
+# Import from canonical locations (NO DUPLICATION)
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from tracker import update_tracker
+from common.geometry import get_bottom_center
+from storage.mongo_handler import get_mongo_handler
+from visual_utils import draw_styled_line, draw_vehicle_box, draw_label, draw_status_hud
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -148,161 +145,15 @@ def scale_line(line, scale):
             (int(line[1][0]*scale), int(line[1][1]*scale)))
 
 
-def draw_styled_line(frame, line, label, color):
-    overlay = frame.copy()
-    cv2.line(overlay, line[0], line[1], color, 7, cv2.LINE_AA)
-    cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame)
-
-    cv2.line(frame, line[0], line[1], (255, 255, 255), 3, cv2.LINE_AA)
-    cv2.line(frame, line[0], line[1], color, 2, cv2.LINE_AA)
-
-    for point in line:
-        cv2.circle(frame, point, 6, (255, 255, 255), -1, cv2.LINE_AA)
-        cv2.circle(frame, point, 3, color, -1, cv2.LINE_AA)
-
-    side_point = line[0] if line[0][0] <= line[1][0] else line[1]
-    anchor_x = side_point[0] + 12
-    anchor_y = max(24, side_point[1] - 10)
-    (text_width, text_height), baseline = cv2.getTextSize(
-        label, UI_FONT, 0.45, 1
-    )
-    left = max(8, anchor_x)
-    top = max(8, anchor_y - text_height - baseline - 6)
-    right = left + text_width + 12
-    bottom = top + text_height + baseline + 8
-
-    panel = frame.copy()
-    cv2.rectangle(panel, (left, top), (right, bottom), (20, 24, 32), -1)
-    cv2.rectangle(panel, (left, top), (right, bottom), color, 1)
-    cv2.addWeighted(panel, 0.52, frame, 0.48, 0, frame)
-
-    cv2.putText(
-        frame,
-        label,
-        (left + 6, bottom - baseline - 4),
-        UI_FONT,
-        0.45,
-        (245, 247, 250),
-        1,
-        cv2.LINE_AA,
-    )
-
-
-def draw_zone_overlay(frame, line1, line2):
-    draw_styled_line(frame, line1, LINE_STYLES[0]["name"], LINE_STYLES[0]["color"])
-    draw_styled_line(frame, line2, LINE_STYLES[1]["name"], LINE_STYLES[1]["color"])
-
-
-def draw_label(frame, text, origin, color, text_color=(255, 255, 255), font_scale=0.48, align="left"):
-    frame_h, frame_w = frame.shape[:2]
-    x, y = origin
-    (text_width, text_height), baseline = cv2.getTextSize(
-        text, UI_FONT, font_scale, 1
-    )
-    box_width = text_width + 12
-    box_height = text_height + baseline + 8
-    if align == "center":
-        x -= box_width // 2
-    x = max(6, min(x, frame_w - box_width - 6))
-    y = max(box_height + 6, min(y, frame_h - 6))
-    top = y - box_height
-
-    panel = frame.copy()
-    cv2.rectangle(panel, (x, top), (x + box_width, y), (16, 20, 28), -1)
-    cv2.rectangle(panel, (x, top), (x + box_width, y), color, 1)
-    cv2.addWeighted(panel, 0.58, frame, 0.42, 0, frame)
-
-    cv2.putText(
-        frame,
-        text,
-        (x + 6, y - 5),
-        UI_FONT,
-        font_scale,
-        text_color,
-        1,
-        cv2.LINE_AA,
-    )
-
-
-def draw_vehicle_box(frame, box, color, emphasis=False):
-    x1, y1, x2, y2 = box
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1, cv2.LINE_AA)
-    cv2.addWeighted(overlay, 0.03 if not emphasis else 0.06, frame, 0.97 if not emphasis else 0.94, 0, frame)
-
-    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1, cv2.LINE_AA)
-
-    corner = 10
-    segments = (
-        ((x1, y1), (x1 + corner, y1)),
-        ((x1, y1), (x1, y1 + corner)),
-        ((x2, y1), (x2 - corner, y1)),
-        ((x2, y1), (x2, y1 + corner)),
-        ((x1, y2), (x1 + corner, y2)),
-        ((x1, y2), (x1, y2 - corner)),
-        ((x2, y2), (x2 - corner, y2)),
-        ((x2, y2), (x2, y2 - corner)),
-    )
-    for start, end in segments:
-        cv2.line(frame, start, end, color, 1, cv2.LINE_AA)
-
-
-def draw_status_hud(frame, speed_limit, violation_count):
-    frame_w = frame.shape[1]
-    panel = frame.copy()
-    left = max(8, frame_w - 210)
-    top = 12
-    right = frame_w - 12
-    bottom = 62
-    cv2.rectangle(panel, (left, top), (right, bottom), (18, 22, 30), -1)
-    cv2.addWeighted(panel, 0.56, frame, 0.44, 0, frame)
-
-    cv2.putText(
-        frame,
-        f"Violations {violation_count}",
-        (left + 12, top + 22),
-        UI_FONT,
-        0.55,
-        (245, 247, 250),
-        1,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        frame,
-        f"Limit {speed_limit} km/h",
-        (left + 12, top + 42),
-        UI_FONT,
-        0.43,
-        (203, 213, 225),
-        1,
-        cv2.LINE_AA,
-    )
-
 def main():
     config = load_config()
 
-    if MongoClient is None:
-        raise RuntimeError(
-            "pymongo is not installed. Install it before running MongoDB uploads."
-        )
-
-    mongo_uri = require_env_value(
-        "VIOLATIONS_MONGO_URI",
-        "Use your MongoDB Atlas connection string.",
-    )
-    mongo_db_name = os.getenv("VIOLATIONS_MONGO_DB", "violations_db").strip() or "violations_db"
-    mongo_collection_name = (
-        os.getenv("VIOLATIONS_MONGO_COLLECTION", "violations").strip() or "violations"
-    )
-
+    # Use unified mongo handler (CANONICAL MONGO HANDLER)
     try:
-        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-        client.admin.command("ping")
-        db = client[mongo_db_name]
-        collection = db[mongo_collection_name]
-    except PyMongoError as exc:
-        raise RuntimeError(f"Could not connect to MongoDB Atlas: {exc}") from exc
+        mongo_handler = get_mongo_handler()
+    except RuntimeError as e:
+        print(f"Warning: MongoDB not available: {e}")
+        mongo_handler = None
 
     ssd_root = require_env_path("VIOLATIONS_SSD_PATH")
     output_root = ssd_root / "speed_violations"
@@ -345,8 +196,8 @@ def main():
 
         tracks = update_tracker(detections, frame)
 
-        draw_zone_overlay(frame, zone1, zone2)
-        draw_status_hud(frame, config["speed_limit_kmph"], len(logged))
+        draw_speed_zones(frame, zone1, zone2)
+        draw_status_hud(frame, len(logged), f"Limit {config['speed_limit_kmph']} km/h")
 
         for tid,x1,y1,x2,y2,cls in tracks:
             pt = get_bottom_center(x1,y1,x2,y2)
@@ -371,23 +222,24 @@ def main():
                     img_path = image_output_dir / f"speed_{tid}_{timestamp}.jpg"
                     cv2.imwrite(str(img_path), frame)
 
-                    try:
-                        with open(img_path, "rb") as image_file:
-                            image_bytes = image_file.read()
-                        data = {
-                            "track_id": tid,
-                            "type": "speed",
-                            "time": datetime.now(),
-                            "speed": speed,
-                            "image": image_bytes,
-                            "image_filename": img_path.name,
-                            "image_path": str(img_path),
-                        }
-                        collection.insert_one(data)
-                    except PyMongoError as exc:
-                        raise RuntimeError(
-                            f"Failed to upload violation image for track ID {tid} to MongoDB: {exc}"
-                        ) from exc
+                    # Use unified mongo handler (CANONICAL HANDLER)
+                    if mongo_handler:
+                        try:
+                            with open(img_path, "rb") as image_file:
+                                image_bytes = image_file.read()
+                            mongo_handler.save_violation(
+                                track_id=tid,
+                                vtype="speed",
+                                speed=speed,
+                                image_bytes=image_bytes,
+                                metadata={
+                                    "image_filename": img_path.name,
+                                    "image_path": str(img_path),
+                                    "camera_id": "speed_detection"
+                                }
+                            )
+                        except Exception as exc:
+                            print(f"Warning: Failed to save violation to MongoDB: {exc}")
 
                     with open(log_path, "a", newline="", encoding="utf-8") as f:
                         writer = csv.writer(f)
@@ -408,3 +260,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

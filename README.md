@@ -1,93 +1,164 @@
-# Parking Violation Detection System
+# Violation Detection System
 
-This system detects illegal parking violations in video footage using computer vision and deep learning.
+This system detects parking and speed violations in video footage using computer vision and deep learning. It supports both video file processing and real-time camera detection.
 
-## Setup
+## Features
+
+- **Parking Violation Detection**: Detects vehicles parked in no-parking zones
+- **Speed Violation Detection**: Measures vehicle speeds and detects violations
+- **Real-time Detection**: Live camera input support
+- **Interactive Zone Configuration**: GUI tools to define parking zones and speed measurement lines
+- **Violation Storage**: Saves violations to MongoDB with video clips and images
+
+## Quick Start
 
 1. **Install Dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
-   - If you plan to use TensorFlow exports such as `.tflite` or `.pb`, also install TensorFlow in a supported Python environment.
 
-2. **Prepare Model:**
-   - Place your trained YOLO model file as `models/best.pt`
-   - The model should be trained to detect vehicles (cars, trucks, buses, motorcycles)
-   - If you instead use `bestv1_tf/bestv1_float32.tflite` or another TensorFlow export, keep reading the troubleshooting notes below.
-
-3. **Prepare Video:**
-   - Place your video file in the `vids/` directory
-   - Update the video path in `config/parking_config.json` if needed
-
-4. **Configure Parking Zone:**
+2. **Configure Detection Zones:**
    ```bash
-   cd parking-violation-detection
-   python zone_detection.py
+   python launcher.py zones    # Configure parking zones
+   python launcher.py lines    # Configure speed measurement lines
    ```
-   - Click 4 points to define the no-parking zone
-   - The configuration will be automatically saved
+
+3. **Run Detection:**
+   ```bash
+   # Live camera detection
+   python launcher.py live
+
+   # Video file detection
+   python launcher.py video path/to/video.mp4
+
+   # Direct command (alternative)
+   python main_detection.py --live 0
+   ```
+
+## Setup
+
+### Model Preparation
+- Place your YOLO model file (e.g., `yolov8n.pt`) in the project root
+- The model should be trained to detect vehicles (cars, trucks, buses, motorcycles)
+
+### Zone Configuration
+
+#### Parking Zones
+```bash
+python parking_violation_detection/zone_detection.py
+```
+- Interactive GUI to draw parking zones
+- Define "Zebra Zone" (no-parking area) and "Buffer Zone"
+- Configuration saved to `config/parking_config.json`
+
+#### Speed Measurement Lines
+```bash
+python speed_violation_detection/line_draw_ui.py
+```
+- Interactive GUI to draw speed detection lines
+- Define Entry and Exit lines for speed measurement
+- Configuration saved to `config/speed_config.json`
 
 ## Usage
 
-Run the parking violation detection:
+### Using the Launcher
+
+The `launcher.py` script provides easy access to all components:
+
 ```bash
-cd parking-violation-detection
-python detect_parking.py
+# Configure zones and lines
+python launcher.py zones          # Parking zone setup
+python launcher.py lines          # Speed line setup
+
+# Run detection
+python launcher.py live           # Live camera (default camera 0)
+python launcher.py live 1         # Live camera (camera 1)
+python launcher.py video myvid.mp4 # Process video file
 ```
 
-## Speed Violation Detection
+### Command Line Options
 
-The system also includes speed violation detection:
+For direct control, use `main_detection.py`:
 
-### Setup for Speed Detection
+```bash
+python main_detection.py [options]
 
-1. **Configure Speed Detection Lines:**
-   - Update `config/speed_config.json` with your video path and speed detection parameters
-   - Set the Y coordinates for the two speed detection lines (LINE1 and LINE2)
-   - Adjust the distance between lines in meters
+Options:
+  --live CAMERA_INDEX, -l CAMERA_INDEX
+                        Use live camera input (e.g., 0 for default camera)
+  --video PATH, -v PATH  Use video file input
+  --config {speed,parking,both}, -c {speed,parking,both}
+                        Configuration to use (default: speed)
+```
 
-2. **Run Speed Detection:**
-   ```bash
-   cd speed-violation-detection
-   python detect_vehicle.py
-   ```
+### Examples
 
-### Speed Detection Configuration
+**Live Detection with Camera:**
+```bash
+python main_detection.py --live 0
+```
 
-The speed detection uses `config/speed_config.json`:
+**Process Video File:**
+```bash
+python main_detection.py --video videos/traffic.mp4
+```
 
-- `video_path`: Path to the video file
-- `speed_limit_kmph`: Speed limit threshold for violations
-- `line1_y`, `line2_y`: Y coordinates of the two speed detection lines
-- `distance_meters`: Real-world distance between the two lines
-- Output paths for results and violation logs
+**Parking Detection Only:**
+```bash
+python main_detection.py --video videos/parking_lot.mp4 --config parking
+```
 
-## Configuration
+## Configuration Files
 
-### Parking Detection (`config/parking_config.json`):
-- `video_path`: Path to the video file (relative to project root)
-- `zone_polygon`: 4 points defining the no-parking zone [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
-- `parking_threshold`: Time in seconds a vehicle must be stationary to be considered illegally parked
+### Parking Config (`config/parking_config.json`)
+```json
+{
+  "video_path": "videos/parking.mp4",
+  "zebra_zone": [[x1,y1], [x2,y2], [x3,y3], [x4,y4]],
+  "buffer_zone": [[x1,y1], [x2,y2], [x3,y3], [x4,y4]],
+  "parking_threshold": 10
+}
+```
 
-### Speed Detection (`config/speed_config.json`):
-- `video_path`: Path to the video file
-- `speed_limit_kmph`: Speed limit threshold
-- `line1_y`, `line2_y`: Y coordinates of speed detection lines
-- `distance_meters`: Distance between detection lines in meters
+### Speed Config (`config/speed_config.json`)
+```json
+{
+  "video_path": "videos/speed.mp4",
+  "speed_limit_kmph": 50,
+  "line1": [[x1,y1], [x2,y2]],
+  "line2": [[x1,y1], [x2,y2]],
+  "distance_meters": 6
+}
+```
 
-## Files
+## Output
 
-### Parking Violation Detection:
-- `detect_parking.py`: Main detection script
-- `zone_detection.py`: Interactive tool to define parking zones
-- `tracker.py`: Object tracking using DeepSORT
-- `utils.py`: Utility functions for coordinate calculations
+- **Video Clips**: Saved to `violations_storage/videos/`
+- **Images**: Saved to MongoDB GridFS
+- **Logs**: Violation events printed to console
+- **Database**: Violations stored in MongoDB collection
 
-### Speed Violation Detection:
-- `detect_vehicle.py`: Main speed detection script
-- `speed_estimator.py`: Speed calculation logic
-- `tracker.py`: Object tracking using DeepSORT
-- `utils.py`: Utility functions for coordinate calculations
+## Files Structure
+
+```
+violation-detection/
+├── main_detection.py          # Main unified detection script
+├── config/
+│   ├── parking_config.json    # Parking zone configuration
+│   └── speed_config.json      # Speed detection configuration
+├── parking_violation_detection/
+│   ├── zone_detection.py      # Interactive parking zone setup
+│   ├── detect_parking.py      # Parking detection logic
+│   ├── tracker.py            # Object tracking
+│   └── utils.py              # Utility functions
+├── speed_violation_detection/
+│   ├── line_draw_ui.py       # Interactive speed line setup
+│   ├── detect_vehicle.py     # Speed detection logic
+│   ├── speed_estimator.py    # Speed calculation
+│   ├── tracker.py           # Object tracking
+│   └── utils.py             # Utility functions
+└── violations_storage/       # Output directory
+```
 
 ## Requirements
 
@@ -96,8 +167,24 @@ The speed detection uses `config/speed_config.json`:
 - Ultralytics YOLO
 - DeepSORT tracker
 - NumPy
+- PyMongo (for database storage)
 
 ## Troubleshooting
+
+### Camera Issues
+- Ensure camera index is correct (usually 0 for built-in camera)
+- Check camera permissions on your system
+- Try different camera indices if multiple cameras are available
+
+### Video Processing
+- Ensure video file exists and is readable
+- Check video codec compatibility
+- For large videos, processing may take time
+
+### Configuration
+- Run zone/line setup tools before detection
+- Verify coordinates are within video frame bounds
+- Check JSON syntax in config files
 
 ### Parking Detection:
 - **Model not found**: Ensure `models/best.pt` exists

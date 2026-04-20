@@ -1,473 +1,357 @@
+#!/usr/bin/env python3
+
 import cv2
-import time
+import argparse
 import json
-import queue
-import threading
 import numpy as np
-import gridfs
-from collections import deque, defaultdict
-from datetime import datetime
+import time
+import sys
+import logging
 from pathlib import Path
+from collections import deque, defaultdict
 
 from ultralytics import YOLO
-from pymongo import MongoClient
 
-from parking_violation_detection.tracker import update_tracker
-from parking_violation_detection.utils import get_bottom_center
+# =========================================================
+# PROJECT ROOT
+# =========================================================
+PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("SmartZebra")
+
+# =========================================================
+# INTERNAL IMPORTS
+# =========================================================
+from tracker import update_tracker
+from common.geometry import (
+    get_bottom_center,
+    is_inside_polygon,
+    is_stationary
+)
+
 from speed_violation_detection.speed_estimator import SpeedEstimator
 
+from visual_utils import (
+    draw_speed_zones,
+    draw_parking_zones,
+    draw_status_hud,
+    draw_vehicle_label,
+    setup_display_window,
+    get_color
+)
 
-# =========================
+from storage.mongo_handler import get_mongo_handler
+
+# =========================================================
 # CONFIG
-# =========================
-
-with open("config/parking_config.json") as f:
-    parking_config = json.load(f)
-
-with open("config/speed_config.json") as f:
-    speed_config = json.load(f)
-
-
-# =========================
-# STORAGE SETUP (SSD + MONGO + GRIDFS)
-# =========================
-
-MONGO_URI = "mongodb+srv://zebra_backend:backend_zebra@smart-zebra-crossing-cl.kahl9t8.mongodb.net/violation_db?retryWrites=true&w=majority&appName=smart-zebra-crossing-cluster"
-
-client = MongoClient(MONGO_URI)
-db = client["violation_db"]
-collection = db["violations"]
-fs = gridfs.GridFS(db)
-
-ssd_root = Path("violations_storage")
-video_dir = ssd_root / "videos"
-
-video_dir.mkdir(parents=True, exist_ok=True)
-
-
-# =========================
-# MODEL LOADER
-# =========================
-
-def load_detection_model(model_path, use_tpu=False):
-    ext = Path(model_path).suffix.lower()
-    if ext == ".tflite":
-        if Interpreter is None:
-            raise RuntimeError(
-                "tflite-runtime or TensorFlow is required to run .tflite models"
-            )
-
-        interpreter_args = {"model_path": str(model_path)}
-        if use_tpu:
-            if load_delegate is None:
-                raise RuntimeError(
-                    "Edge TPU delegate is required for Coral TPU support"
-                )
-            interpreter_args["experimental_delegates"] = [
-                load_delegate("libedgetpu.so.1")
-            ]
-
-        interpreter = Interpreter(**interpreter_args)
-        interpreter.allocate_tensors()
-        return {
-            "type": "tflite",
-            "interpreter": interpreter,
-            "input_details": interpreter.get_input_details(),
-            "output_details": interpreter.get_output_details(),
-        }
-
-    return {"type": "yolo", "model": YOLO(model_path)}
-
-
-class DetectionBoxes:
-    def __init__(self, xyxy, conf, cls):
-        self.xyxy = xyxy
-        self.conf = conf
-        self.cls = cls
-
-
-class DetectionResult:
-    def __init__(self, boxes):
-        self.boxes = boxes
-
-
-def decode_tflite_detections(model, frame, conf_threshold=0.25):
-    interpreter = model["interpreter"]
-    input_details = model["input_details"]
-    output_details = model["output_details"]
-
-    input_shape = input_details[0]["shape"]
-    input_height, input_width = int(input_shape[1]), int(input_shape[2])
-
-    resized = cv2.resize(frame, (input_width, input_height))
-    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-    input_data = np.expand_dims(rgb, axis=0)
-
-    if input_details[0]["dtype"] == np.float32:
-        input_data = input_data.astype(np.float32) / 255.0
-    else:
-        input_data = input_data.astype(input_details[0]["dtype"])
-
-    interpreter.set_tensor(input_details[0]["index"], input_data)
-    interpreter.invoke()
-
-    outputs = [interpreter.get_tensor(o["index"]) for o in output_details]
-
-    boxes = np.empty((0, 4), dtype=np.float32)
-    scores = np.empty((0,), dtype=np.float32)
-    classes = np.empty((0,), dtype=np.int32)
-
-    if len(outputs) >= 1 and outputs[0].ndim == 3 and outputs[0].shape[-1] > 5:
-        data = outputs[0][0]
-        xywh = data[:, :4]
-        obj_conf = data[:, 4]
-        class_probs = data[:, 5:]
-        class_ids = np.argmax(class_probs, axis=-1).astype(np.int32)
-        class_scores = class_probs[np.arange(len(class_ids)), class_ids]
-        confs = obj_conf * class_scores
-
-        mask = confs >= conf_threshold
-        xywh = xywh[mask]
-        confs = confs[mask]
-        class_ids = class_ids[mask]
-
-        if xywh.shape[0] > 0:
-            xyxy = np.zeros((xywh.shape[0], 4), dtype=np.float32)
-            xyxy[:, 0] = xywh[:, 0] - (xywh[:, 2] / 2)
-            xyxy[:, 1] = xywh[:, 1] - (xywh[:, 3] / 2)
-            xyxy[:, 2] = xywh[:, 0] + (xywh[:, 2] / 2)
-            xyxy[:, 3] = xywh[:, 1] + (xywh[:, 3] / 2)
-
-            scale_x = frame.shape[1] / input_width
-            scale_y = frame.shape[0] / input_height
-            xyxy[:, [0, 2]] *= scale_x
-            xyxy[:, [1, 3]] *= scale_y
-
-            rects = xywh.copy()
-            rects[:, 0] = rects[:, 0] - rects[:, 2] / 2
-            rects[:, 1] = rects[:, 1] - rects[:, 3] / 2
-            rects[:, 2] = rects[:, 2]
-            rects[:, 3] = rects[:, 3]
-            rects[:, [0, 2]] *= scale_x
-            rects[:, [1, 3]] *= scale_y
-
-            indices = cv2.dnn.NMSBoxes(
-                rects.tolist(),
-                confs.tolist(),
-                conf_threshold,
-                0.45,
-            )
-            if len(indices) > 0:
-                indices = np.array(indices).flatten()
-                boxes = xyxy[indices]
-                scores = confs[indices]
-                classes = class_ids[indices]
-    elif len(outputs) >= 3:
-        raw_boxes = outputs[0][0]
-        raw_scores = outputs[1][0]
-        raw_classes = outputs[2][0].astype(np.int32)
-        mask = raw_scores >= conf_threshold
-        if np.any(mask):
-            boxes = raw_boxes[mask]
-            scores = raw_scores[mask]
-            classes = raw_classes[mask]
-
-            scale_x = frame.shape[1] / input_width
-            scale_y = frame.shape[0] / input_height
-            boxes[:, [0, 2]] *= scale_x
-            boxes[:, [1, 3]] *= scale_y
-
-    return DetectionResult(DetectionBoxes(boxes, scores, classes))
-
-
-# =========================
-# HELPERS
-# =========================
-
-def inside_polygon(x, y, poly):
-    return cv2.pointPolygonTest(poly, (x, y), False) >= 0
-
-
-def is_stationary(positions, threshold=5):
-    if len(positions) < 5:
-        return False
-
-    d = [
-        np.linalg.norm(np.array(positions[i]) - np.array(positions[i - 1]))
-        for i in range(1, len(positions))
-    ]
-    return np.mean(d) < threshold
-
-
-# =========================
-# SAVE WORKER
-# =========================
-
-class ViolationSaver(threading.Thread):
-    def __init__(self, collection, fs):
-        super().__init__(daemon=True)
-        self.collection = collection
-        self.fs = fs
-        self.tasks = queue.Queue()
-        self._stopped = threading.Event()
-        self.start()
-
-    def enqueue(self, video_frames, frame, tid, vtype, speed):
-        self.tasks.put((video_frames, frame, tid, vtype, speed))
-
-    def run(self):
-        while not self._stopped.is_set() or not self.tasks.empty():
-            try:
-                video_frames, frame, tid, vtype, speed = self.tasks.get(timeout=0.25)
-            except queue.Empty:
-                continue
-
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            video_path = video_dir / f"{vtype}_{tid}_{ts}.mp4"
-            image_filename = f"{vtype}_{tid}_{ts}.jpg"
-
-            h, w = frame.shape[:2]
-            writer = cv2.VideoWriter(
-                str(video_path),
-                cv2.VideoWriter_fourcc(*"mp4v"),
-                30,
-                (w, h)
-            )
-            for f in video_frames:
-                writer.write(f)
-            writer.release()
-
-            success, encoded_img = cv2.imencode('.jpg', frame)
-            if not success:
-                self.tasks.task_done()
-                continue
-            image_bytes = encoded_img.tobytes()
-
-            grid_id = self.fs.put(
-                image_bytes,
-                filename=image_filename,
-                track_id=tid,
-                type=vtype,
-                speed=speed,
-                time=datetime.now()
-            )
-
-            self.collection.insert_one({
-                "track_id": tid,
-                "type": vtype,
-                "speed": speed,
-                "time": datetime.now(),
-                "video_path": str(video_path),
-                "image_filename": image_filename,
-                "gridfs_image_id": grid_id,
-                "source": "violation_engine_v1"
-            })
-            self.tasks.task_done()
-
-    def stop(self):
-        self._stopped.set()
-        self.join(timeout=5)
-
-
-# =========================
-# ENGINE
-# =========================
-
-class ViolationEngine:
-    def __init__(self, video_path, fps=30):
-
-        self.cap = cv2.VideoCapture(video_path)
-        self.fps = fps
-
-        loaded_model = load_detection_model(
-            speed_config["model_path"],
-            speed_config.get("use_tpu", False),
-        )
-        self.model_type = loaded_model["type"]
-        self.model = loaded_model
-
-        self.estimator = SpeedEstimator(fps, speed_config["distance_meters"])
-        self.imgsz = speed_config.get("imgsz", 640)
-        self.display = speed_config.get("display_window", False)
-
-        self.frame_buffer = deque(maxlen=int(fps * 5))
-
-        self.vehicle_positions = defaultdict(lambda: deque(maxlen=10))
-        self.vehicle_entry_time = {}
-
-        self.speed_buffer = defaultdict(int)
-        self.park_buffer = defaultdict(int)
-
-        self.speed_violations = set()
-        self.parking_violations = set()
-        self.logged = set()
-
-        self.zone1 = tuple(map(tuple, speed_config["line1"]))
-        self.zone2 = tuple(map(tuple, speed_config["line2"]))
-
-        self.zebra_zone = np.array(parking_config["zebra_zone"], dtype=np.int32)
-        self.buffer_zone = np.array(parking_config["buffer_zone"], dtype=np.int32)
-
-        self.saver = ViolationSaver(collection, fs)
-
-    # =========================
-    # SAVE FUNCTION (SSD + MONGO + GRIDFS)
-    # =========================
-
-    def save_violation(self, frame, tid, vtype, speed):
-        self.saver.enqueue(list(self.frame_buffer), frame.copy(), tid, vtype, speed)
-
-    # =========================
-    # MAIN LOOP
-    # =========================
-
-    def run(self):
-
-        while True:
-            ret, frame = self.cap.read()
-            if not ret:
-                break
-
-            self.frame_buffer.append(frame.copy())
-
-            frame_id = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
-
-            if self.model_type == "yolo":
-                results = self.model["model"](
-                    frame, conf=0.25, imgsz=self.imgsz, verbose=False
-                )[0]
-            else:
-                results = decode_tflite_detections(self.model, frame, conf_threshold=0.25)
-
-            detections = []
-            for box, conf, cls in zip(results.boxes.xyxy, results.boxes.conf, results.boxes.cls):
-                x1, y1, x2, y2 = map(int, box)
-                detections.append(([x1, y1, x2 - x1, y2 - y1], conf.item(), int(cls)))
-
-            tracks = update_tracker(detections, frame)
-
-            for tid, x1, y1, x2, y2, cls in tracks:
-
-                cx, cy = get_bottom_center(x1, y1, x2, y2)
-
-                # =========================
-                # SPEED
-                # =========================
-                measurement, _ = self.estimator.update(
-                    tid, (cx, cy), frame_id, self.zone1, self.zone2
-                )
-
-                speed = measurement["speed_kmph"] if measurement else 0
-
-                if speed > speed_config["speed_limit_kmph"]:
-                    self.speed_buffer[tid] += 1
-                else:
-                    self.speed_buffer[tid] = max(0, self.speed_buffer[tid] - 1)
-
-                if self.speed_buffer[tid] >= 5:
-                    self.speed_violations.add(tid)
-
-                # =========================
-                # PARKING
-                # =========================
-
-                self.vehicle_positions[tid].append((cx, cy))
-
-                inside = (
-                    inside_polygon(cx, cy, self.zebra_zone) or
-                    inside_polygon(cx, cy, self.buffer_zone)
-                )
-
-                stationary = is_stationary(self.vehicle_positions[tid])
-
-                if stationary and inside:
-                    self.park_buffer[tid] += 1
-                else:
-                    self.park_buffer[tid] = max(0, self.park_buffer[tid] - 1)
-
-                if self.park_buffer[tid] >= int(self.fps * 2):
-                    if tid not in self.vehicle_entry_time:
-                        self.vehicle_entry_time[tid] = time.time()
-
-                    duration = time.time() - self.vehicle_entry_time[tid]
-
-                    if duration > parking_config["parking_threshold"]:
-                        self.parking_violations.add(tid)
-                else:
-                    self.vehicle_entry_time.pop(tid, None)
-
-                # =========================
-                # VIOLATION TYPE
-                # =========================
-
-                vtype = None
-
-                if tid in self.speed_violations:
-                    vtype = "speed"
-
-                if tid in self.parking_violations:
-                    vtype = "parking"
-
-                if tid in self.speed_violations and tid in self.parking_violations:
-                    vtype = "both"
-
-                # =========================
-                # SAVE + EVENT OUTPUT
-                # =========================
-
-                if vtype and tid not in self.logged:
-                    self.logged.add(tid)
-
-                    # SAVE EVERYTHING (SSD + MONGO + GRIDFS)
-                    self.save_violation(frame, tid, vtype, speed)
-
-                    # EVENT (for future LED/web integration)
-                    print({
-                        "track_id": tid,
-                        "type": vtype,
-                        "speed": speed,
-                        "time": datetime.now()
-                    })
-
-                # =========================
-                # DEBUG DISPLAY
-                # =========================
-
-                color = (0, 255, 0)
-                label = f"{speed:.1f} km/h"
-
-                if tid in self.speed_violations:
-                    color = (0, 0, 255)
-                    label = "Speed Violation"
-
-                if tid in self.parking_violations:
-                    color = (255, 0, 0)
-                    label = "Parking Violation"
-
-                if tid in self.speed_violations and tid in self.parking_violations:
-                    color = (0, 0, 0)
-                    label = "Both Violations"
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, label, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-            if self.display:
-                cv2.imshow("Violation Engine", frame)
-                if cv2.waitKey(1) == 27:
-                    break
-
-        self.saver.stop()
-        self.cap.release()
-        if self.display:
-            cv2.destroyAllWindows()
-
-
-# =========================
+# =========================================================
+VEHICLE_CLASSES = {1, 2, 3, 5, 7}
+
+def load_config(path):
+    config_path = PROJECT_ROOT / path
+    if not config_path.exists():
+        raise FileNotFoundError(path)
+    with open(config_path) as f:
+        return json.load(f)
+
+speed_config = load_config("config/speed_config.json")
+parking_config = load_config("config/parking_config.json")
+
+# =========================================================
+# ARGS
+# =========================================================
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--live", type=int, default=None)
+    parser.add_argument("--video", type=str, default=None)
+    return parser.parse_args()
+
+# =========================================================
 # MAIN
-# =========================
+# =========================================================
+def main():
 
+    args = parse_args()
+
+    # ---------------- VIDEO ----------------
+    if args.live is not None:
+        cap = cv2.VideoCapture(args.live)
+    elif args.video:
+        cap = cv2.VideoCapture(args.video)
+    else:
+        cap = cv2.VideoCapture(str(PROJECT_ROOT / speed_config["video_path"]))
+
+    if not cap.isOpened():
+        raise RuntimeError("Cannot open video source")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+
+    # ---------------- MODEL ----------------
+    model = YOLO(str(PROJECT_ROOT / "best.pt"))
+
+    # ---------------- SPEED ----------------
+    speed_estimator = SpeedEstimator(
+        fps,
+        speed_config["distance_meters"]
+    )
+
+    # ---------------- MONGO ----------------
+    mongo = get_mongo_handler()
+
+    # ---------------- SSD STORAGE ----------------
+    ssd_dir = Path("violations_storage/videos")
+    ssd_dir.mkdir(parents=True, exist_ok=True)
+
+    # =========================================================
+    # STATE
+    # =========================================================
+    vehicle_positions = defaultdict(lambda: deque(maxlen=30))
+    vehicle_entry_time = {}
+    last_speed = defaultdict(float)
+
+    locked_state = {}
+    logged = set()
+
+    violation_buffer = defaultdict(lambda: deque(maxlen=30))
+    recording_active = {}
+
+    total_violations = 0
+    speed_violation_count = 0
+    parking_violation_count = 0
+
+    violation_triggered = defaultdict(lambda: {
+        "speed": False,
+        "parking": False
+    })
+
+    # ---------------- ZONES ----------------
+    speed_line1 = np.array(speed_config["line1"], np.int32)
+    speed_line2 = np.array(speed_config["line2"], np.int32)
+
+    parking_zone = np.array(parking_config["zebra_zone"], np.int32)
+    buffer_zone = np.array(parking_config.get("buffer_zone", []), np.int32)
+
+    setup_display_window("Smart Zebra", 1280, 720)
+
+    frame_idx = 0
+
+    # =========================================================
+    while True:
+
+        ret, frame = cap.read()
+        if not ret:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            continue
+
+        annotated = frame.copy()
+
+        results = model(frame, conf=0.25, verbose=False)[0]
+
+        detections = []
+
+        for box, conf, cls in zip(results.boxes.xyxy,
+                                   results.boxes.conf,
+                                   results.boxes.cls):
+
+            if int(cls) in VEHICLE_CLASSES:
+                x1, y1, x2, y2 = map(int, box)
+                detections.append(([x1, y1, x2 - x1, y2 - y1], float(conf), int(cls)))
+
+        tracks = update_tracker(detections, frame)
+
+        active = set()
+
+        # =========================================================
+        # VEHICLE LOOP
+        # =========================================================
+        for tid, x1, y1, x2, y2, cls in tracks:
+
+            active.add(tid)
+
+            cx, cy = get_bottom_center(x1, y1, x2, y2)
+            vehicle_positions[tid].append((cx, cy))
+
+            violation_buffer[tid].append(frame.copy())
+
+            # ---------------- SPEED ----------------
+            measurement = speed_estimator.update(
+                tid,
+                (cx, cy),
+                frame_idx,
+                speed_line1.tolist(),
+                speed_line2.tolist()
+            )
+
+            speed = last_speed.get(tid, 0.0)
+
+            if measurement and "speed_kmph" in measurement:
+                speed = float(measurement["speed_kmph"])
+                last_speed[tid] = speed
+
+            speed_violation = speed > speed_config["speed_limit_kmph"]
+
+            # ---------------- PARKING ----------------
+            stationary = is_stationary(vehicle_positions[tid])
+
+            in_zone = (
+                is_inside_polygon(cx, cy, parking_zone) or
+                (len(buffer_zone) >= 3 and is_inside_polygon(cx, cy, buffer_zone))
+            )
+
+            parking_violation = False
+
+            if stationary and in_zone:
+                if tid not in vehicle_entry_time:
+                    vehicle_entry_time[tid] = time.time()
+
+                duration = time.time() - vehicle_entry_time[tid]
+                parking_violation = duration > parking_config.get("parking_threshold", 10)
+            else:
+                vehicle_entry_time.pop(tid, None)
+
+            # ---------------- STATE ----------------
+            prev = locked_state.get(tid, "normal")
+
+            if speed_violation and parking_violation:
+                vtype = "both"
+            elif speed_violation:
+                vtype = "speed"
+            elif parking_violation:
+                vtype = "parking"
+            elif prev in ("speed", "parking", "both"):
+                vtype = prev
+            else:
+                vtype = "normal"
+
+            locked_state[tid] = vtype
+
+            # =========================================================
+            # COUNTERS (NO SPAM)
+            # =========================================================
+            if speed_violation:
+                if not violation_triggered[tid]["speed"]:
+                    speed_violation_count += 1
+                    violation_triggered[tid]["speed"] = True
+            else:
+                violation_triggered[tid]["speed"] = False
+
+            if parking_violation:
+                if not violation_triggered[tid]["parking"]:
+                    parking_violation_count += 1
+                    violation_triggered[tid]["parking"] = True
+            else:
+                violation_triggered[tid]["parking"] = False
+
+            # =========================================================
+            # EVENT START
+            # =========================================================
+            if vtype in ("speed", "parking", "both"):
+
+                if (tid, vtype) not in logged:
+                    logged.add((tid, vtype))
+                    total_violations += 1
+
+                    logger.info(f"🚨 SPEED | ID={tid} | Speed={int(speed)} km/h")
+
+                    # ---------------- MONGO IMAGE ----------------
+                    if mongo:
+                        try:
+                            mongo.save_violation(
+                                annotated,
+                                tid,
+                                vtype,
+                                float(speed),
+                                metadata={
+                                    "type": vtype,
+                                    "speed": float(speed),
+                                    "timestamp": time.time()
+                                }
+                            )
+                        except Exception as e:
+                            logger.warning(f"Mongo failed: {e}")
+
+                    # ---------------- START VIDEO CLIP ----------------
+                    h, w = frame.shape[:2]
+                    path = ssd_dir / f"violation_{tid}_{int(time.time())}.mp4"
+
+                    writer = cv2.VideoWriter(
+                        str(path),
+                        cv2.VideoWriter_fourcc(*"mp4v"),
+                        fps,
+                        (w, h)
+                    )
+
+                    # write buffered frames
+                    for f in violation_buffer[tid]:
+                        writer.write(f)
+
+                    recording_active[tid] = writer
+
+            # =========================================================
+            # CONTINUE RECORDING
+            # =========================================================
+            if tid in recording_active:
+                recording_active[tid].write(frame)
+
+            # =========================================================
+            # STOP RECORDING
+            # =========================================================
+            if vtype == "normal" and tid in recording_active:
+                recording_active[tid].release()
+                del recording_active[tid]
+                violation_buffer[tid].clear()
+
+            # ---------------- DRAW ----------------
+            has_speed = speed > 0
+
+            draw_vehicle_label(
+                annotated,
+                (x1, y1, x2, y2),
+                tid,
+                speed,
+                has_speed,
+                vtype
+            )
+
+        # =========================================================
+        # CLEANUP
+        # =========================================================
+        for tid in list(vehicle_positions.keys()):
+            if tid not in active:
+                vehicle_positions.pop(tid, None)
+                vehicle_entry_time.pop(tid, None)
+
+        # =========================================================
+        # UI
+        # =========================================================
+        draw_speed_zones(annotated, speed_line1, speed_line2)
+        draw_parking_zones(annotated, parking_zone, buffer_zone)
+
+        draw_status_hud(
+            annotated,
+            total_violations,
+            f"Speed Limit {speed_config['speed_limit_kmph']} km/h",
+            speed_violation_count,
+            parking_violation_count
+        )
+
+        cv2.imshow("Smart Zebra", annotated)
+
+        frame_idx += 1
+
+        if cv2.waitKey(1) == 27:
+            break
+
+    cap.release()
+
+    for w in recording_active.values():
+        w.release()
+
+    cv2.destroyAllWindows()
+
+
+# =========================================================
 if __name__ == "__main__":
-    video_path = speed_config["video_path"]
-    engine = ViolationEngine(video_path)
-    engine.run()
+    main()

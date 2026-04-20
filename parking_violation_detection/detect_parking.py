@@ -30,6 +30,23 @@ ZONE_STYLES = {
     "buffer": {"label": "Buffer Zone", "color": (255, 191, 64)},
 }
 
+# ========================
+# CANONICAL IMPORTS (NO DUPLICATION)
+# ========================
+# Import from canonical locations instead of duplicating code
+try:
+    from tracker import update_tracker
+    from common.geometry import get_bottom_center, is_inside_polygon, is_stationary
+    from visual_utils import draw_badge, draw_styled_polygon, draw_vehicle_box, draw_status_hud
+except ImportError:
+    # Fallback for standalone execution
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from tracker import update_tracker
+    from common.geometry import get_bottom_center, is_inside_polygon, is_stationary
+    from visual_utils import draw_badge, draw_styled_polygon, draw_vehicle_box, draw_status_hud
+
+# ========================
+
 # -------------------------------
 # Load Config
 # -------------------------------
@@ -88,135 +105,9 @@ def resolve_video_path():
     exit(1)
 
 
-def draw_badge(frame, text, origin, color, font_scale=0.6, text_color=(245, 247, 250)):
-    import cv2
-
-    frame_h, frame_w = frame.shape[:2]
-    x, y = origin
-    (text_width, text_height), baseline = cv2.getTextSize(
-        text, UI_FONT, font_scale, 1
-    )
-    box_width = text_width + 12
-    box_height = text_height + baseline + 8
-    x = max(6, min(x, frame_w - box_width - 6))
-    y = max(box_height + 6, min(y, frame_h - 6))
-    top = y - box_height
-    right = x + box_width
-
-    panel = frame.copy()
-    cv2.rectangle(panel, (x, top), (right, y), (16, 20, 28), -1)
-    cv2.rectangle(panel, (x, top), (right, y), color, 1)
-    cv2.addWeighted(panel, 0.58, frame, 0.42, 0, frame)
-
-    cv2.putText(
-        frame,
-        text,
-        (x + 6, y - 5),
-        UI_FONT,
-        font_scale,
-        text_color,
-        1,
-        cv2.LINE_AA,
-    )
-
-
-def draw_styled_polygon(frame, polygon, label, color):
-    import cv2
-    import numpy as np
-
-    overlay = frame.copy()
-    cv2.fillPoly(overlay, [polygon], color)
-    cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame)
-
-    cv2.polylines(frame, [polygon], True, (255, 255, 255), 3, cv2.LINE_AA)
-    cv2.polylines(frame, [polygon], True, color, 2, cv2.LINE_AA)
-
-    for point in polygon:
-        px, py = int(point[0]), int(point[1])
-        cv2.circle(frame, (px, py), 6, (255, 255, 255), -1, cv2.LINE_AA)
-        cv2.circle(frame, (px, py), 3, color, -1, cv2.LINE_AA)
-
-    anchor = polygon[np.argmin(polygon[:, 0])]
-    draw_badge(frame, label, (int(anchor[0]) + 10, max(26, int(anchor[1]) - 8)), color, font_scale=0.45)
-
-
-def draw_vehicle_box(frame, box, color, emphasis=False):
-    import cv2
-
-    x1, y1, x2, y2 = box
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1, cv2.LINE_AA)
-    cv2.addWeighted(overlay, 0.03 if not emphasis else 0.06, frame, 0.97 if not emphasis else 0.94, 0, frame)
-
-    cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 1, cv2.LINE_AA)
-
-    corner = 10
-    segments = (
-        ((x1, y1), (x1 + corner, y1)),
-        ((x1, y1), (x1, y1 + corner)),
-        ((x2, y1), (x2 - corner, y1)),
-        ((x2, y1), (x2, y1 + corner)),
-        ((x1, y2), (x1 + corner, y2)),
-        ((x1, y2), (x1, y2 - corner)),
-        ((x2, y2), (x2 - corner, y2)),
-        ((x2, y2), (x2, y2 - corner)),
-    )
-    for start, end in segments:
-        cv2.line(frame, start, end, color, 1, cv2.LINE_AA)
-
-
-def draw_status_hud(frame, threshold_seconds, violation_count):
-    import cv2
-
-    frame_w = frame.shape[1]
-    panel = frame.copy()
-    left = max(8, frame_w - 210)
-    top = 12
-    right = frame_w - 12
-    bottom = 62
-    cv2.rectangle(panel, (left, top), (right, bottom), (18, 22, 30), -1)
-    cv2.addWeighted(panel, 0.56, frame, 0.44, 0, frame)
-
-    cv2.putText(
-        frame,
-        f"Violations {violation_count}",
-        (left + 12, top + 22),
-        UI_FONT,
-        0.55,
-        (245, 247, 250),
-        1,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        frame,
-        f"Threshold {threshold_seconds}s",
-        (left + 12, top + 42),
-        UI_FONT,
-        0.43,
-        (203, 213, 225),
-        1,
-        cv2.LINE_AA,
-    )
-
 # -------------------------------
-# Helpers
+# Helpers - SHARED FROM COMMON (NO DUPLICATION)
 # -------------------------------
-def is_inside_polygon(cx, cy, polygon):
-    import cv2
-    return cv2.pointPolygonTest(polygon, (float(cx), float(cy)), False) >= 0
-
-def is_stationary(positions, threshold=5):
-    import numpy as np
-    if len(positions) < 5:
-        return False
-
-    distances = [
-        np.linalg.norm(np.array(positions[i]) - np.array(positions[i-1]))
-        for i in range(1, len(positions))
-    ]
-    return np.mean(distances) < threshold
-
 def resize_for_output(frame, max_width):
     import cv2
 
@@ -243,16 +134,6 @@ def main():
     log("Importing Ultralytics YOLO...")
     from ultralytics import YOLO
     log("Ultralytics imported.")
-
-    log("Importing tracker...")
-    try:
-        from .tracker import update_tracker
-        from .utils import get_bottom_center
-    except ImportError:
-        from tracker import update_tracker
-        from utils import get_bottom_center
-    log("Tracker imported.")
-    log("Utils imported.")
 
     log("Starting detect_parking.py")
     model_path = resolve_model_path()
@@ -337,7 +218,7 @@ def main():
         # -------------------------------
         draw_styled_polygon(frame, zebra_polygon, ZONE_STYLES["zebra"]["label"], ZONE_STYLES["zebra"]["color"])
         draw_styled_polygon(frame, buffer_polygon, ZONE_STYLES["buffer"]["label"], ZONE_STYLES["buffer"]["color"])
-        draw_status_hud(frame, config["parking_threshold"], violation_count)
+        draw_status_hud(frame, violation_count, f"Threshold {config['parking_threshold']}s")
 
         current_time = time.time()
 
@@ -419,3 +300,4 @@ def main():
 # -------------------------------
 if __name__ == "__main__":
     main()
+
