@@ -1,9 +1,15 @@
 import cv2
-import gridfs
 import numpy as np
-from pymongo import MongoClient
+import os
 from pathlib import Path
 from datetime import datetime
+
+try:
+    import gridfs
+    from pymongo import MongoClient
+except ImportError:
+    gridfs = None
+    MongoClient = None
 
 
 class MongoHandler:
@@ -11,7 +17,7 @@ class MongoHandler:
         self,
         mongo_uri: str,
         db_name: str = "smart_crossing_db",
-        collection_name: str = "violation"
+        collection_name: str = "violations"
     ):
         self.mongo_uri = mongo_uri
         self.db_name = db_name
@@ -26,6 +32,10 @@ class MongoHandler:
     # CONNECT
     # =========================================================
     def connect(self) -> bool:
+        if MongoClient is None or gridfs is None:
+            print("MongoDB support disabled: install pymongo to enable database storage.")
+            return False
+
         try:
             self.client = MongoClient(self.mongo_uri, serverSelectionTimeoutMS=5000)
             self.client.server_info()
@@ -34,11 +44,14 @@ class MongoHandler:
             self.collection = self.db[self.collection_name]
             self.fs = gridfs.GridFS(self.db)
 
-            print("✅ MongoDB Atlas connected")
+            print(
+                f"MongoDB Atlas connected | db={self.db_name} | "
+                f"collection={self.collection_name}"
+            )
             return True
 
         except Exception as e:
-            print(f"⚠️ MongoDB unavailable: {e}")
+            print(f"MongoDB unavailable: {e}")
             return False
 
     # =========================================================
@@ -54,7 +67,7 @@ class MongoHandler:
     ) -> bool:
 
         if self.fs is None:
-            print("❌ Save failed: MongoDB not connected")
+            print("Save failed: MongoDB not connected")
             return False
 
         try:
@@ -71,13 +84,17 @@ class MongoHandler:
                 "metadata": metadata or {}
             }
 
-            self.collection.insert_one(doc)
+            result = self.collection.insert_one(doc)
 
-            print(f"💾 Saved {vtype} | ID={track_id} | Speed={speed:.1f} km/h")
+            print(
+                f"Saved {vtype} | ID={track_id} | Speed={speed:.1f} km/h | "
+                f"db={self.db_name} | collection={self.collection_name} | "
+                f"doc_id={result.inserted_id} | image_id={image_id}"
+            )
             return True
 
         except Exception as e:
-            print(f"❌ Save failed: {e}")
+            print(f"Save failed: {e}")
             return False
 
     # =========================================================
@@ -97,11 +114,11 @@ class MongoHandler:
 
             out.release()
 
-            print(f"📹 Video saved: {video_path}")
+            print(f"Video saved: {video_path}")
             return True
 
         except Exception as e:
-            print(f"❌ Video save failed: {e}")
+            print(f"Video save failed: {e}")
             return False
 
     # =========================================================
@@ -118,19 +135,60 @@ class MongoHandler:
 _handler = None
 
 
+def load_local_env():
+    env_candidates = [
+        Path(__file__).resolve().parents[1] / ".env",
+        Path.cwd() / ".env",
+    ]
+
+    for env_path in env_candidates:
+        if not env_path.exists():
+            continue
+
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+        return env_path
+
+    return None
+
+
 def get_mongo_handler(
     mongo_uri: str = None,
     db_name: str = "smart_crossing_db",
-    collection_name: str = "violation"
+    collection_name: str = "violations"
 ):
     global _handler
 
     if _handler is None:
+        env_path = load_local_env()
+        resolved_mongo_uri = mongo_uri or os.getenv("SMART_ZEBRA_MONGO_URI", "").strip()
+        if not resolved_mongo_uri:
+            if env_path is not None:
+                print(
+                    f"MongoDB support disabled: SMART_ZEBRA_MONGO_URI is missing in {env_path}."
+                )
+            else:
+                print("MongoDB support disabled: SMART_ZEBRA_MONGO_URI is not set.")
+            return None
+
+        resolved_db_name = os.getenv("SMART_ZEBRA_MONGO_DB", db_name).strip() or db_name
+        resolved_collection_name = (
+            os.getenv("SMART_ZEBRA_MONGO_COLLECTION", collection_name).strip() or collection_name
+        )
+
         _handler = MongoHandler(
-            mongo_uri or
-            "mongodb+srv://zebra_backend:backend_zebra@smart-zebra-crossing-cl.kahl9t8.mongodb.net/smart_crossing_db?retryWrites=true&w=majority",
-            db_name,
-            collection_name
+            resolved_mongo_uri,
+            resolved_db_name,
+            resolved_collection_name
         )
         _handler.connect()
 

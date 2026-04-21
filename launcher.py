@@ -12,29 +12,22 @@ from pathlib import Path
 
 def run_zone_detection():
     """Run the parking zone detection UI"""
-    script_path = Path(__file__).parent / "parking_violation_detection" / "zone_detection.py"
-    print("Starting Parking Zone Detection UI...")
-    print("Instructions:")
-    print("- Draw ZEBRA zone first (no-parking area)")
-    print("- Press N to switch to BUFFER zone")
-    print("- Press S to save both zones")
-    print("- Press ESC to quit")
+    script_path = Path(__file__).parent / "ui" / "calibrator_ui.py"
+    print("Starting calibration UI...")
+    print("Choose parking zone mode in the app and save your changes there.")
     subprocess.run([sys.executable, str(script_path)])
 
 def run_line_ui():
     """Run the speed line drawing UI"""
-    script_path = Path(__file__).parent / "speed_violation_detection" / "line_draw_ui.py"
-    print("Starting Speed Line Drawing UI...")
-    print("Instructions:")
-    print("- Click and drag to draw lines")
-    print("- Press N to confirm each line")
-    print("- Press S to save when you have 2 lines")
-    print("- Press ESC to quit")
+    script_path = Path(__file__).parent / "ui" / "calibrator_ui.py"
+    print("Starting calibration UI...")
+    print("Choose speed line mode in the app and save your changes there.")
     subprocess.run([sys.executable, str(script_path)])
 
-def run_detection(live=None, video=None, config="speed"):
+def run_detection(live=None, video=None, config="speed", model=None, tpu=False, output_dir=None):
     """Run the main detection system"""
-    cmd = [sys.executable, "-m", "violation_detection.main_detection"]
+    script_path = Path(__file__).parent / "main_detection.py"
+    cmd = [sys.executable, str(script_path)]
 
     if live is not None:
         cmd.extend(["--live", str(live)])
@@ -46,6 +39,12 @@ def run_detection(live=None, video=None, config="speed"):
         print("Starting detection with default configuration...")
 
     cmd.extend(["--config", config])
+    if model:
+        cmd.extend(["--model", model])
+    if tpu:
+        cmd.append("--tpu")
+    if output_dir:
+        cmd.extend(["--output-dir", output_dir])
     subprocess.run(cmd)
 
 def main():
@@ -67,6 +66,9 @@ Examples:
     parser.add_argument("argument", nargs="?", help="Additional argument (camera index or video path)")
     parser.add_argument("--config", "-c", choices=["speed", "parking", "both"],
                        default="speed", help="Configuration type (default: speed)")
+    parser.add_argument("--model", "-m", help="Path to a .pt or .tflite model")
+    parser.add_argument("--tpu", action="store_true", help="Use the Edge TPU delegate for TFLite models")
+    parser.add_argument("--output-dir", help="Directory for saved violation clips")
 
     args = parser.parse_args()
 
@@ -76,11 +78,23 @@ Examples:
         run_line_ui()
     elif args.command == "live":
         camera_index = int(args.argument) if args.argument else 0
-        run_detection(live=camera_index, config=args.config)
+        run_detection(
+            live=camera_index,
+            config=args.config,
+            model=args.model,
+            tpu=args.tpu,
+            output_dir=args.output_dir
+        )
     elif args.command == "video":
         if not args.argument:
             parser.error("Video path required for 'video' command")
-        run_detection(video=args.argument, config=args.config)
+        run_detection(
+            video=args.argument,
+            config=args.config,
+            model=args.model,
+            tpu=args.tpu,
+            output_dir=args.output_dir
+        )
 
 if __name__ == "__main__":
     main()

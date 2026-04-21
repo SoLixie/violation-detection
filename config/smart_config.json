@@ -1,0 +1,70 @@
+{
+    "source": "C:/Users/deche/OneDrive/Desktop/Violations/violation-detection/data/videos/both.mp4",
+    "distance_meters": 10.0,
+    "speed_limit_kmph": 50.0,
+    "parking_threshold": 10.0,
+    "speed_lines": {
+        "line1": [
+            [
+                1443,
+                1235
+            ],
+            [
+                1623,
+                952
+            ]
+        ],
+        "line2": [
+            [
+                1972,
+                1250
+            ],
+            [
+                2032,
+                952
+            ]
+        ]
+    },
+    "zones": {
+        "zebra": [],
+        "buffer": []
+    },
+    "parking_zones": {
+        "zebra_zone": [
+            [
+                120,
+                1014
+            ],
+            [
+                678,
+                903
+            ],
+            [
+                825,
+                924
+            ],
+            [
+                244,
+                1058
+            ]
+        ],
+        "buffer_zone": [
+            [
+                272,
+                1070
+            ],
+            [
+                847,
+                928
+            ],
+            [
+                1040,
+                936
+            ],
+            [
+                420,
+                1107
+            ]
+        ]
+    }
+}
